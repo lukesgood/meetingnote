@@ -66,6 +66,15 @@ object MeetingEngine {
     private var recorder: AudioRecorder? = null
     private var transcriber: StreamingTranscriber? = null
     private var whisper: WhisperContext? = null
+    private var whisperSpec: ModelSpec? = null
+
+    /** 요청한 음성인식 모델을 불러옴. 다른 모델이 올라가 있으면 해제 후 교체 */
+    private fun loadWhisper(spec: ModelSpec): WhisperContext {
+        whisper?.let { if (whisperSpec == spec) return it }
+        releaseWhisper()
+        ErrorReporter.trail("Whisper 로드: ${spec.id} (스레드 ${settings.threads})")
+        return WhisperContext.load(models.file(spec).path).also { whisper = it; whisperSpec = spec }
+    }
     @Volatile private var summarizer: Summarizer? = null
     private var recordedSamples = 0L
     private var processedMs = 0L
@@ -83,7 +92,7 @@ object MeetingEngine {
         }
     }
 
-    fun missingSttModels() = listOf(ModelCatalog.WHISPER, ModelCatalog.VAD).filterNot { models.isReady(it) }
+    fun missingSttModels(spec: ModelSpec = settings.whisper) = listOf(spec, ModelCatalog.VAD).filterNot { models.isReady(it) }
 
     // ---------------------------------------------------------------- 녹음
 
@@ -94,13 +103,14 @@ object MeetingEngine {
             _state.value = EngineState(Phase.ERROR, message = "음성인식 모델이 필요합니다: ${missing.joinToString { it.title }}")
             return
         }
-        val meeting = repo.create()
+        val sttSpec = settings.whisper
+        val meeting = repo.create().copy(sttModel = sttSpec.title).also { repo.save(it) }
         _state.value = EngineState(Phase.LOADING, meetingId = meeting.id, message = "음성인식 모델 불러오는 중…")
         startService()
 
         scope.launch(inference) {
             try {
-                val w = whisper ?: run { ErrorReporter.trail("Whisper 로드 (스레드 ${settings.threads})"); WhisperContext.load(models.file(ModelCatalog.WHISPER).path) }.also { whisper = it }
+                val w = loadWhisper(sttSpec)
                 recordedSamples = 0; processedMs = 0
                 val t = StreamingTranscriber(
                     scope = CoroutineScope(inference),
@@ -171,18 +181,24 @@ object MeetingEngine {
 
     // ------------------------------------------------- 파일에서 인식 (가져오기/재인식)
 
-    fun transcribeFile(meetingId: String, thenSummarize: Boolean = true) {
+    /** @param sttSpec 사용할 음성인식 모델 (기본: 설정값, '고정밀 다시 인식'은 turbo) */
+    fun transcribeFile(meetingId: String, thenSummarize: Boolean = true, sttSpec: ModelSpec = settings.whisper) {
         if (_state.value.busy) return
+        val missing = missingSttModels(sttSpec)
+        if (missing.isNotEmpty()) {
+            _state.value = EngineState(Phase.ERROR, message = "음성인식 모델이 필요합니다: ${missing.joinToString { it.title }}")
+            return
+        }
         _state.value = EngineState(Phase.TRANSCRIBING_FILE, meetingId = meetingId, message = "음성 파일 인식 중…")
         startService()
         scope.launch {
             try {
                 val w = withContext(inference) {
-                    whisper ?: run { ErrorReporter.trail("Whisper 로드 (스레드 ${settings.threads})"); WhisperContext.load(models.file(ModelCatalog.WHISPER).path) }.also { whisper = it }
+                    loadWhisper(sttSpec)
                 }
                 val audio = repo.audioFile(meetingId)
                 val totalMs = wavSampleCount(audio) * 1000L / AudioRecorder.SAMPLE_RATE
-                repo.get(meetingId)?.let { repo.save(it.copy(durationMs = totalMs, recording = false, recovered = false)) }
+                repo.get(meetingId)?.let { repo.save(it.copy(durationMs = totalMs, recording = false, recovered = false, sttModel = sttSpec.title)) }
                 processedMs = 0
                 val t = StreamingTranscriber(
                     scope = CoroutineScope(inference), whisper = w,
@@ -299,7 +315,7 @@ object MeetingEngine {
     // ---------------------------------------------------------------- 공통
 
     private fun releaseWhisper() {
-        whisper?.close(); whisper = null
+        whisper?.close(); whisper = null; whisperSpec = null
     }
 
     private fun finishIdle() {
@@ -330,6 +346,10 @@ class Settings(context: Context) {
         set(v) = prefs.edit().putString("llm", v.id).apply()
 
     /** 용어 사전: 회사명·인명·전문용어 (쉼표 구분). 음성인식 힌트와 회의록 표기 교정에 사용 */
+    var whisper: ModelSpec
+        get() = ModelCatalog.whispers.firstOrNull { it.id == prefs.getString("whisper", null) } ?: ModelCatalog.WHISPER
+        set(v) = prefs.edit().putString("whisper", v.id).apply()
+
     var vocabulary: String
         get() = prefs.getString("vocabulary", "") ?: ""
         set(v) = prefs.edit().putString("vocabulary", v.trim()).apply()

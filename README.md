@@ -9,7 +9,8 @@ Lenovo Xiaoxin Pad Pro 12.7 (TB371FC) · Snapdragon 870 (1×A77 3.19GHz + 3×A77
 
 | 단계 | 구성 | 결과 |
 |---|---|---|
-| 음성인식 | whisper.cpp small **q8_0**, beam 5, 4스레드, Silero VAD | 실제 시간의 **0.26~0.36배** (15분 회의 → 약 5분, 녹음 중 병행 처리) |
+| 음성인식 (표준) | whisper.cpp small **q8_0**, beam 5, 4스레드, Silero VAD | 실제 시간의 **0.26~0.36배** (15분 회의 → 약 5분, 녹음 중 병행 처리) · 문자 오류 1.9% |
+| 음성인식 (고정밀) | large-v3-turbo **q8_0** | 실제 시간의 **0.65~0.76배** (7.6분 연속에도 감속 없음) · 문자 오류 0~0.1% |
 | 요약 (고품질, 기본) | Qwen3-4B-Instruct-2507 Q4_0 | 프롬프트 30~38 tok/s, 생성 6.5~7.5 tok/s |
 | 요약 (빠름) | EXAONE 4.0 1.2B Q4_K_M | 프롬프트 100 tok/s, 생성 21~30 tok/s |
 | 1.5분 회의 전체 | 인식 + 회의록 | 약 87초 |
@@ -18,7 +19,7 @@ Lenovo Xiaoxin Pad Pro 12.7 (TB371FC) · Snapdragon 870 (1×A77 3.19GHz + 3×A77
 ### 검토했지만 채택하지 않은 것
 - **GPU (Adreno 650 + llama.cpp OpenCL)**: 공식 지원은 Adreno 7xx 이상. 6xx 드라이버에는 커널 내장 함수가 없어 컴파일이 실패하고, 범용 경로는 드라이버 내부(`cl_a6x_cmdbuf_mgr_submit_ibs`)에서 크래시 → CPU 사용
 - **Whisper base**: 0.17배로 빠르지만 문장 누락·숫자 오인식(9건→5건, 1일→2일)
-- **Whisper small q5_0**: q8_0보다 오히려 느림 (A77에서 q5 커널이 비효율적)
+- **Whisper small q5_0 / turbo q5_0**: q8_0보다 오히려 느림 (A77에서 q5 커널이 비효율적. turbo q5_0은 1.9배로 실시간 불가)
 - **Greedy 디코딩**: 빠르지만 한국어에서 대부분의 문장이 누락 → beam 5 유지
 - **8스레드**: 4스레드보다 느림 (리틀코어가 병목) → 빅코어 4개에 고정
 
@@ -33,6 +34,7 @@ Lenovo Xiaoxin Pad Pro 12.7 (TB371FC) · Snapdragon 870 (1×A77 3.19GHz + 3×A77
 8. 포그라운드 서비스와 partial wake lock으로 화면이 꺼져도 녹음·처리 지속
 
 ## 기능
+- **음성인식 모델 선택**: 표준(small)·고정밀(large-v3-turbo). 상세 화면의 '고정밀 다시 인식'으로 중요한 회의만 다시 처리
 - 녹음 중 실시간 녹취록, 종료 후 자동 회의록 생성, 알림창에서 바로 종료
 - **외부 음성 파일 가져오기**: m4a/mp3/aac/ogg/wav, 동영상의 오디오 (MediaCodec 디코딩 → 16kHz 변환, 스트리밍)
 - **용어 사전**: 회사명·인명·전문용어를 Whisper initial prompt와 회의록 프롬프트에 반영해 표기 교정

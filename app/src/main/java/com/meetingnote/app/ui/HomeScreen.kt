@@ -100,7 +100,7 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
     LaunchedEffect(state.phase, tick) { meetings = MeetingEngine.repo.list() }
     LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }   // 다운로드 진행률 갱신
 
-    val requiredMissing = (listOf(ModelCatalog.WHISPER, ModelCatalog.VAD, MeetingEngine.settings.llm))
+    val requiredMissing = (listOf(MeetingEngine.settings.whisper, ModelCatalog.VAD, MeetingEngine.settings.llm))
         .filterNot { MeetingEngine.models.isReady(it) }
         .also { tick }
 
@@ -254,6 +254,7 @@ fun ModelRow(spec: ModelSpec, tick: Int) {
 fun SettingsDialog(onDismiss: () -> Unit, onReport: () -> Unit = {}) {
     val settings = MeetingEngine.settings
     var llm by remember { mutableStateOf(settings.llm) }
+    var stt by remember { mutableStateOf(settings.whisper) }
     var threads by remember { mutableIntStateOf(settings.threads) }
     var vocab by remember { mutableStateOf(settings.vocabulary) }
     var tick by remember { mutableIntStateOf(0) }
@@ -267,7 +268,7 @@ fun SettingsDialog(onDismiss: () -> Unit, onReport: () -> Unit = {}) {
         modifier = Modifier.imePadding(),
         confirmButton = {
             TextButton(onClick = {
-                settings.llm = llm; settings.threads = threads; settings.vocabulary = vocab; onDismiss()
+                settings.llm = llm; settings.whisper = stt; settings.threads = threads; settings.vocabulary = vocab; onDismiss()
             }) { Text("저장") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
@@ -297,7 +298,21 @@ fun SettingsDialog(onDismiss: () -> Unit, onReport: () -> Unit = {}) {
                     }
                 }
                 Text("음성인식 모델", fontWeight = FontWeight.SemiBold)
-                ModelRow(ModelCatalog.WHISPER, tick)
+                ModelCatalog.whispers.forEach { spec ->
+                    Row(
+                        Modifier.fillMaxWidth().selectable(stt == spec, onClick = { stt = spec }),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(stt == spec, onClick = { stt = spec })
+                        Column(Modifier.weight(1f)) { ModelRow(spec, tick) }
+                    }
+                }
+                Text(
+                    "이 기기(Snapdragon 870) 실측: 고정밀 모델은 문자 오류가 적지만(1.9% → 0%) 녹음 시간의 약 0.75배가 걸려 " +
+                        "실시간 인식 여유가 작고 배터리 소모가 큽니다. 표준으로 녹음하고, 중요한 회의만 상세 화면의 " +
+                        "'고정밀 다시 인식'을 쓰는 것을 권장합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 ModelRow(ModelCatalog.VAD, tick)
                 Text("CPU 스레드: $threads", fontWeight = FontWeight.SemiBold)
                 Slider(threads.toFloat(), { threads = it.toInt() }, valueRange = 2f..8f, steps = 5)

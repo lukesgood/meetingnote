@@ -17,6 +17,8 @@ data class Meeting(
     val durationMs: Long,
     val hasMinutes: Boolean,
     val modelUsed: String? = null,
+    /** 녹취록을 만든 음성인식 모델 */
+    val sttModel: String? = null,
     val stats: String? = null,
     /** 사용자가 직접 제목을 수정했는지 (자동 제목 생성 여부 판단) */
     val titleEdited: Boolean = false,
@@ -49,7 +51,7 @@ class MeetingRepository(context: Context) {
         val o = JSONObject()
             .put("id", m.id).put("title", m.title).put("createdAt", m.createdAt)
             .put("durationMs", m.durationMs).put("hasMinutes", m.hasMinutes)
-            .put("modelUsed", m.modelUsed ?: JSONObject.NULL).put("stats", m.stats ?: JSONObject.NULL)
+            .put("modelUsed", m.modelUsed ?: JSONObject.NULL).put("sttModel", m.sttModel ?: JSONObject.NULL).put("stats", m.stats ?: JSONObject.NULL)
             .put("titleEdited", m.titleEdited).put("recording", m.recording).put("recovered", m.recovered)
         metaFile(m.id).writeText(o.toString(2))
     }
@@ -65,6 +67,7 @@ class MeetingRepository(context: Context) {
             durationMs = o.optLong("durationMs"),
             hasMinutes = minutesFile(id).exists(),
             modelUsed = o.optString("modelUsed").takeIf { it.isNotEmpty() && it != "null" },
+            sttModel = o.optString("sttModel").takeIf { it.isNotEmpty() && it != "null" },
             stats = o.optString("stats").takeIf { it.isNotEmpty() && it != "null" },
             titleEdited = o.optBoolean("titleEdited"),
             recording = o.optBoolean("recording"),
