@@ -1,0 +1,93 @@
+0.00.004.163 I llama_completion: llama backend init
+0.00.011.690 I llama_completion: load the model and apply lora adapter, if any
+0.00.403.823 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.02.090.788 I cmn          init: llama threadpool init, n_threads = 4
+0.02.269.135 I llama_completion: chat template example:
+<|im_start|>system
+You are a helpful assistant<|im_end|>
+<|im_start|>user
+Hello<|im_end|>
+<|im_start|>assistant
+Hi there<|im_end|>
+<|im_start|>user
+How are you?<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+
+0.02.269.149 I 
+0.02.269.303 I system_info: n_threads = 4 (n_threads_batch = 4) / 8 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | DOTPROD = 1 | LLAMAFILE = 1 | REPACK = 1 | 
+0.02.269.305 I 
+0.02.271.997 I sampler seed: 1453776433
+0.02.272.016 I sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.200
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+0.02.272.029 I sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist 
+0.02.272.030 I generate: n_ctx = 4096, n_batch = 2048, n_predict = 700, n_keep = 0
+0.02.272.031 I 
+system
+당신은 회의록 작성 전문가입니다. 주어진 회의 녹취록을 읽고 아래 형식의 한국어 회의록을 작성하세요. 녹취록에 없는 내용은 만들지 마세요.
+
+## 회의 요약
+(3문장 이내)
+
+## 주요 논의 사항
+- 항목별로 정리
+
+## 결정 사항
+- 확정된 내용
+
+## 할 일 (담당자 / 기한)
+- 담당자: 할 일 (기한)
+
+## 다음 회의
+- 일시
+user
+다음은 회의 녹취록입니다.
+
+김팀장, 자, 그럼 주간회의 시작하겠습니다. 오늘 안건은 신제품 출시 일정과 마케팅 예산입니다. 이대리, 네, 개발족은 베타 테스트가 지난주에 끝났고 발견된 버그 12건 중 9건을 수정했습니다. 나머지 3건은 다음 주 수요일까지 처리할 예정입니다. 김팀장, 그러면 출시 일은 예정대로 12월 1일로 가도 될까요? 박과장, 마케팅 입장에서는 12월 1일이 좋습니다. 다만 광고 예산이 현재 2천만 원인데 온라인 광고를 늘리려면 500만 원 정도 추가가 필요합니다. 김팀장, 추가 예산은 제가 이번 주 금요일까지 본부장님께 보고해서 승인 받겠습니다. 이대리, 그리고 출시 전에 고객 지원팀 대상 교육이 필요할 것 같습니다. 박과장, 교육 자료는 제가 다음 주 월요일까지 만들어서 공유하겠습니다. 김팀장, 좋습니다. 정리하면 출시 일은 12월 1일 확정. 남은 버그는 이대리가 수요일까지 예산 승인은 제가 금요일까지 교육 자료는 박과장이 월요일까지 준비합니다. 다음 회의는 다음 주 화요일 오전 10시입니다. 수고하셨습니다. 
+assistant
+<think>
+Okay, let's start by reading through the meeting transcript carefully. The user wants me to summarize it into a Korean meeting minutes document. The original transcript has several points: the weekly meeting starts, the agenda is product launch date and marketing budget. They mention beta testing, bug fixes, and the launch date. There's also a discussion about the marketing budget increase, the need for employee training, and the deadlines for each party.
+
+First, I need to condense this into a three-paragraph summary. The user specified that the summary should be concise, so I need to highlight the key points without going into too much detail. The main points are the launch date confirmation, the budget adjustment, the training schedule, and the next meeting.
+
+Next, the main discussion points. The user wants them listed in bullet points. The key items would be the launch date, the budget increase, the training, and the deadlines. I need to make sure each point is clear and concise.
+
+For the decisions, the user wants the confirmed items. The launch date is confirmed as December 1st. The budget adjustment is pending, and the training is scheduled. The next meeting is set for next week's Monday at 10 AM.
+
+The tasks with assignees and deadlines: the budget approval is pending, and the training is to be done by specific dates. The user also mentioned the next meeting date.
+
+I need to ensure that the Korean meeting minutes follow the structure: meeting summary, main discussion points, decisions, tasks with assignees and deadlines, and the next meeting. The user also wants the tasks in bullet points, so I'll list them accordingly.
+
+I should check for any information that's not in the transcript. For example, the user mentioned "이대리" and "박과장" as assignees, so I need to include them in the tasks. The deadlines are important here, like the budget approval by Friday and the training by Monday.
+
+I need to make sure the dates and times are correctly formatted in Korean. For example, "다음 주 화요일 오전 10시" is correct. Also, the names of the people are in Korean, so I should use the correct transliteration.
+
+Finally, the user wants the entire thing in Korean, so I'll write the meeting minutes in Korean, following the structure they provided. I'll avoid adding any information not present in the transcript, and keep it to three paragraphs for the summary, then the main discussion points, decisions, tasks, and next meeting.
+</think>
+
+## 회의 요약  
+- **주간 회의** 진행, **신제품 출시 일정** 및 **마케팅 예산** 논의  
+- **출시 일정**은 **12월 1일**로 확정  
+- **마케팅 예산**은 **2천만 원**으로, **500만 원** 추가로 **총 2,500만 원**으로 조정  
+- **교육 자료**는 **박과장**이 **다음 주 월요일**까지 준비  
+- **버그 처리**는 **이대리**가 **수요일까지** 처리  
+
+## 주요 논의 사항  
+- **출시 일정**은 **12월 1일**로 확정  
+- **마케팅 예산** 조정 및 **500만
+
+0.53.646.323 I common_perf_print:    sampling time =     164.91 ms
+0.53.646.325 I common_perf_print:    samplers time =      98.45 ms /  1191 tokens
+0.53.646.327 I common_perf_print:        load time =    1940.22 ms
+0.53.646.329 I common_perf_print: prompt eval time =    5012.91 ms /   491 tokens (   10.21 ms per token,    97.95 tokens per second)
+0.53.646.332 I common_perf_print:        eval time =   46159.97 ms /   699 runs   (   66.04 ms per token,    15.14 tokens per second)
+0.53.646.333 I common_perf_print:       total time =   51378.05 ms /  1190 tokens
+0.53.646.336 I common_perf_print: unaccounted time =      40.26 ms /   0.1 %      (total - sampling - prompt eval - eval) / (total)
+0.53.646.336 I common_perf_print:    graphs reused =        695
+0.53.646.338 I common_perf_print:   graph reallocs =          0    /     0        (same size) / (changed size)

@@ -1,0 +1,81 @@
+0.00.003.821 I llama_completion: llama backend init
+0.00.011.555 I llama_completion: load the model and apply lora adapter, if any
+0.00.414.321 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.05.050.500 I cmn          init: llama threadpool init, n_threads = 4
+0.05.686.943 W *** User-specified prompt will pre-start conversation, did you mean to set --system-prompt (-sys) instead?
+0.05.688.723 I llama_completion: chat template example:
+<|im_start|>system
+You are a helpful assistant<|im_end|>
+<|im_start|>user
+Hello<|im_end|>
+<|im_start|>assistant
+Hi there<|im_end|>
+<|im_start|>user
+How are you?<|im_end|>
+<|im_start|>assistant
+
+0.05.688.738 I 
+0.05.688.920 I system_info: n_threads = 4 (n_threads_batch = 4) / 8 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | DOTPROD = 1 | LLAMAFILE = 1 | REPACK = 1 | 
+0.05.688.925 I 
+0.05.703.845 I sampler seed: 88818328
+0.05.703.865 I sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.200
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+0.05.703.883 I sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist 
+0.05.703.884 I generate: n_ctx = 4096, n_batch = 2048, n_predict = 800, n_keep = 0
+0.05.703.885 I 
+user
+당신은 회의록 작성 전문가입니다. 주어진 회의 녹취록을 읽고 아래 형식의 한국어 회의록을 작성하세요. 녹취록에 없는 내용은 만들지 마세요.
+
+## 회의 요약
+(3문장 이내)
+
+## 주요 논의 사항
+- 항목별로 정리
+
+## 결정 사항
+- 확정된 내용
+
+## 할 일 (담당자 / 기한)
+- 담당자: 할 일 (기한)
+
+## 다음 회의
+- 일시
+
+다음은 회의 녹취록입니다.
+
+김팀장, 자, 그럼 주간회의 시작하겠습니다. 오늘 안건은 신제품 출시 일정과 마케팅 예산입니다. 이대리, 네, 개발족은 베타 테스트가 지난주에 끝났고 발견된 버그 12건 중 9건을 수정했습니다. 나머지 3건은 다음 주 수요일까지 처리할 예정입니다. 김팀장, 그러면 출시 일은 예정대로 12월 1일로 가도 될까요? 박과장, 마케팅 입장에서는 12월 1일이 좋습니다. 다만 광고 예산이 현재 2천만 원인데 온라인 광고를 늘리려면 500만 원 정도 추가가 필요합니다. 김팀장, 추가 예산은 제가 이번 주 금요일까지 본부장님께 보고해서 승인 받겠습니다. 이대리, 그리고 출시 전에 고객 지원팀 대상 교육이 필요할 것 같습니다. 박과장, 교육 자료는 제가 다음 주 월요일까지 만들어서 공유하겠습니다. 김팀장, 좋습니다. 정리하면 출시 일은 12월 1일 확정. 남은 버그는 이대리가 수요일까지 예산 승인은 제가 금요일까지 교육 자료는 박과장이 월요일까지 준비합니다. 다음 회의는 다음 주 화요일 오전 10시입니다. 수고하셨습니다. 
+assistant
+## 회의 요약  
+신제품 출시 일정은 12월 1일로 확정되었으며, 마케팅 예산 추가 500만 원이 필요함을 확인했습니다. 고객 지원팀 대상 교육 자료 준비도 함께 진행됩니다.
+
+## 주요 논의 사항  
+- 개발팀: 베타 테스트가 지난주에 완료되었으며, 12건의 버그 중 9건을 수정했고, 나머지 3건은 다음 주 수요일까지 처리할 예정  
+- 마케팅팀: 12월 1일 출시가 가능하지만, 온라인 광고 확대를 위해 500만 원 추가 예산이 필요함  
+- 고객 지원팀: 출시 전 고객 지원팀 대상 교육이 필요함
+
+## 결정 사항  
+- 신제품 출시 일정: 12월 1일 (확정)  
+- 마케팅 예산 추가: 500만 원 (승인 요청 중)  
+- 고객 지원 교육 자료 준비: 박과장이 다음 주 월요일까지 완료
+
+## 할 일 (담당자 / 기한)  
+- 담당자: 이대리, 남은 버그 3건 처리 (다음 주 수요일까지)  
+- 담당자: 김팀장, 추가 마케팅 예산 승인 보고 (이번 주 금요일까지)  
+- 담당자: 박과장, 고객 지원 교육 자료 작성 및 공유 (다음 주 월요일까지)
+
+## 다음 회의  
+- 일시: 다음 주 화요일 오전 10시 [end of text]
+
+
+1.09.583.839 I common_perf_print:    sampling time =     102.97 ms
+1.09.583.841 I common_perf_print:    samplers time =      54.76 ms /   871 tokens
+1.09.583.843 I common_perf_print:        load time =    5358.21 ms
+1.09.583.846 I common_perf_print: prompt eval time =   12881.68 ms /   487 tokens (   26.45 ms per token,    37.81 tokens per second)
+1.09.583.850 I common_perf_print:        eval time =   50872.44 ms /   383 runs   (  132.83 ms per token,     7.53 tokens per second)
+1.09.583.852 I common_perf_print:       total time =   63896.90 ms /   870 tokens
+1.09.583.854 I common_perf_print: unaccounted time =      39.81 ms /   0.1 %      (total - sampling - prompt eval - eval) / (total)
+1.09.583.855 I common_perf_print:    graphs reused =        380
+1.09.583.856 I common_perf_print:   graph reallocs =          0    /     0        (same size) / (changed size)

@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.22)
+project(llama_jni C CXX)
+
+set(LLAMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/llama.cpp)
+
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} ${MN_ARCH_FLAGS} -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MN_ARCH_FLAGS} -O3")
+
+set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP          OFF CACHE BOOL "" FORCE)
+set(GGML_NATIVE          OFF CACHE BOOL "" FORCE)
+# Adreno 650에서는 llama.cpp OpenCL 백엔드가 드라이버 크래시 → CPU 전용
+set(GGML_OPENCL          OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(${LLAMA_DIR} llama_build)
+
+add_library(llama_jni SHARED llama_jni.cpp)
+target_link_libraries(llama_jni PRIVATE llama ggml-cpu android log)
+target_link_options(llama_jni PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections -s)
+set_target_properties(llama_jni PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)

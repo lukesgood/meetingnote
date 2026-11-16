@@ -1,0 +1,87 @@
+0.00.004.464 I llama_completion: llama backend init
+0.00.012.987 I llama_completion: load the model and apply lora adapter, if any
+0.00.263.996 W load: special_eos_id is not in special_eog_ids - the tokenizer config may be incorrect
+0.01.561.077 I cmn          init: llama threadpool init, n_threads = 4
+0.01.665.451 I llama_completion: chat template example:
+[|user|]
+Hello[|endofturn|]
+[|assistant|]
+<think>
+
+</think>
+
+Hi there[|endofturn|]
+[|user|]
+How are you?[|endofturn|]
+[|assistant|]
+<think>
+
+</think>
+
+
+0.01.665.460 I 
+0.01.665.565 I system_info: n_threads = 4 (n_threads_batch = 4) / 8 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | DOTPROD = 1 | LLAMAFILE = 1 | REPACK = 1 | 
+0.01.665.565 I 
+0.01.668.072 I sampler seed: 756298051
+0.01.668.089 I sampler params: 
+	repeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000
+	dry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64
+	top_k = 40, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.200
+	mirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900
+0.01.668.096 I sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist 
+0.01.668.097 I generate: n_ctx = 4096, n_batch = 2048, n_predict = 700, n_keep = 0
+0.01.668.097 I 
+
+다음은 회의 녹취록입니다.
+
+김팀장, 자, 그럼 주간회의 시작하겠습니다. 오늘 안건은 신제품 출시 일정과 마케팅 예산입니다. 이대리, 네, 개발족은 베타 테스트가 지난주에 끝났고 발견된 버그 12건 중 9건을 수정했습니다. 나머지 3건은 다음 주 수요일까지 처리할 예정입니다. 김팀장, 그러면 출시 일은 예정대로 12월 1일로 가도 될까요? 박과장, 마케팅 입장에서는 12월 1일이 좋습니다. 다만 광고 예산이 현재 2천만 원인데 온라인 광고를 늘리려면 500만 원 정도 추가가 필요합니다. 김팀장, 추가 예산은 제가 이번 주 금요일까지 본부장님께 보고해서 승인 받겠습니다. 이대리, 그리고 출시 전에 고객 지원팀 대상 교육이 필요할 것 같습니다. 박과장, 교육 자료는 제가 다음 주 월요일까지 만들어서 공유하겠습니다. 김팀장, 좋습니다. 정리하면 출시 일은 12월 1일 확정. 남은 버그는 이대리가 수요일까지 예산 승인은 제가 금요일까지 교육 자료는 박과장이 월요일까지 준비합니다. 다음 회의는 다음 주 화요일 오전 10시입니다. 수고하셨습니다. 
+
+<think>
+Hmm, 사용자가 회의 녹취록을 분석해달라고 요청했네. 이 녹취록은 마케팅 회의 내용으로 보이고, 주요 결정 사항들이 포함되어 있어.
+
+사용자는 아마도 이 회의 내용을 정리하거나 요약해서 필요한 정보만 간결하게 제공받길 원하는 것 같아. 특히 출시 일정과 예산 관련 핵심 포인트를 강조해야겠어.
+
+김팀장의 입장에서 가장 중요한 건 출시일 확정(12월 1일)과 추가 예산 승인 절차야. 박과장과 이대리의 역할 분담도 명확히 해야 할 것 같아 - 교육 자료 준비 일정이 다음 주 월요일로 명시되어 있으니 이 부분도 포함시키자.
+
+회의 마무리 시간인 다음 주 화요일 오전 10시 회의도 잊지 말아야지. 사용자가 회의 효율성을 높이려는 의도라면 모든 약속을 체크리스트 형식으로 정리해주는 게 좋겠다.
+</think>
+
+회의 녹취록을 주요 안건과 결정 사항 중심으로 정리하면 다음과 같습니다:
+
+### 📌 주요 결정 사항
+1. **신제품 출시일 확정**  
+   - ✅ 12월 1일로 결정됨 (김팀장 주도)
+
+2. **버그 처리 일정**  
+   - ✅ 개발팀: 지난주 베타테스트에서 발견된 버그 12건 중 9건 수정 완료  
+   - 남은 3건은 다음 주 수요일까지 처리 예정 (예산 필요성 확인)
+
+3. **마케팅 예산 계획**  
+   - 현재 예산: 2,000만 원  
+   - 추가 필요 예산: 온라인 광고 확대 시 500만 원 추가 필요  
+   - ✅ 김팀장: 이번 주 금요일까지 본부장님께 예산 승인 요청
+
+4. **고객 지원팀 교육**  
+   - ✅ 이대리 주도로 출시 전 교육 자료 준비 예정  
+   - 박과장: 다음 주 월요일까지 자료 공유
+
+---
+
+### 📅 일정 및 후속 조치
+- **다음 회의**: 다음 주 화요일 오전 10시  
+- 남은 업무 할당:  
+  ▶️ 예산 승인 절차 진행 중 (김팀장)  
+  ▶️ 교육 자료 제작 및 공유 (박과장-이대리 협업)
+
+회의 종료 시 모든 약속을 확인하고, 특히 예산 승인 및 교육 자료 준비가 시급한 점을 중점적으로 관리해 주세요. [end of text]
+
+
+0.29.026.677 I common_perf_print:    sampling time =      75.48 ms
+0.29.026.679 I common_perf_print:    samplers time =      45.46 ms /   807 tokens
+0.29.026.680 I common_perf_print:        load time =    1456.55 ms
+0.29.026.682 I common_perf_print: prompt eval time =    2825.22 ms /   286 tokens (    9.88 ms per token,   101.23 tokens per second)
+0.29.026.684 I common_perf_print:        eval time =   24430.84 ms /   520 runs   (   46.98 ms per token,    21.28 tokens per second)
+0.29.026.685 I common_perf_print:       total time =   27362.00 ms /   806 tokens
+0.29.026.687 I common_perf_print: unaccounted time =      30.45 ms /   0.1 %      (total - sampling - prompt eval - eval) / (total)
+0.29.026.688 I common_perf_print:    graphs reused =        517
+0.29.026.689 I common_perf_print:   graph reallocs =          0    /     0        (same size) / (changed size)

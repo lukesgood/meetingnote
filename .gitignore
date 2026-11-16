@@ -1,0 +1,15 @@
+.gradle/
+build/
+local.properties
+.venv/
+models/
+build-bench/
+.cxx/
+*.wav
+*.mp3
+*.apk
+*.aab
+*.keystore
+*.jks
+third_party/OpenCL-*/
+dist/
