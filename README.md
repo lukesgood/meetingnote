@@ -91,6 +91,11 @@ native-llama/     llama.cpp JNI (libllama_jni.so)  ※ ggml 심볼을 숨겨 두
 native-common/    빅코어 선택/고정 유틸리티
 ```
 
-## 라이선스 주의
+## 라이선스
+- 이 프로젝트 코드: [MIT](LICENSE)
+- whisper.cpp, llama.cpp: MIT (서브모듈)
+- 모델은 저장소·APK에 포함되지 않으며 첫 실행 시 각 배포처에서 내려받음. 모델별 라이선스는 아래 참고
+
+### 주의
 - EXAONE 4.0은 **비상업 라이선스**. 상업적으로 쓰려면 Qwen3(Apache-2.0)만 사용할 것
 - 화자 분리는 아직 미지원 (녹취록에 화자 이름이 말로 언급될 때만 반영됨)
