@@ -106,6 +106,32 @@ class ModelStore(private val context: Context) {
         return dm.enqueue(req)
     }
 
+    /** 받은 모델 파일 삭제 (진행 중인 다운로드도 취소) */
+    fun delete(spec: ModelSpec) {
+        cancel(spec)
+        file(spec).delete()
+    }
+
+    /** 진행 중인 다운로드 취소 */
+    fun cancel(spec: ModelSpec) {
+        val dm = context.getSystemService(DownloadManager::class.java)
+        val ids = ArrayList<Long>()
+        dm.query(DownloadManager.Query())?.use { c ->
+            val titleIdx = c.getColumnIndex(DownloadManager.COLUMN_TITLE)
+            val idIdx = c.getColumnIndex(DownloadManager.COLUMN_ID)
+            val statusIdx = c.getColumnIndex(DownloadManager.COLUMN_STATUS)
+            while (c.moveToNext()) {
+                val st = c.getInt(statusIdx)
+                val active = st != DownloadManager.STATUS_SUCCESSFUL && st != DownloadManager.STATUS_FAILED
+                if (active && c.getString(titleIdx)?.endsWith(spec.title) == true) ids += c.getLong(idIdx)
+            }
+        }
+        if (ids.isNotEmpty()) dm.remove(*ids.toLongArray())
+    }
+
+    /** 받아 둔 모델이 차지하는 용량 */
+    fun usedBytes(): Long = dir.listFiles()?.sumOf { it.length() } ?: 0L
+
     /** 진행률(0~1), 진행 중인 다운로드가 없으면 null */
     fun progress(spec: ModelSpec): Float? {
         val dm = context.getSystemService(DownloadManager::class.java)

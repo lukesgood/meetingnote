@@ -78,7 +78,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () -> Unit) {
+fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () -> Unit, onOpenSettings: () -> Unit) {
     val state by MeetingEngine.state.collectAsState()
     val ctx = LocalContext.current
     // 외부 음성/동영상 파일 가져오기 (휴대폰 녹음, 메신저로 받은 파일 등)
@@ -91,7 +91,6 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
         }
     }
     var meetings by remember { mutableStateOf(emptyList<Meeting>()) }
-    var showSettings by remember { mutableStateOf(false) }
     // 오류 보고: 지난 실행의 비정상 종료 / 처리 오류 / 직접 보고
     var pendingCrash by remember { mutableStateOf(ErrorReporter.pendingCrash()) }
     var report by remember { mutableStateOf<ReportRequest?>(null) }
@@ -113,7 +112,7 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                         enabled = !state.busy,
                         onClick = { importLauncher.launch(arrayOf("audio/*", "video/*")) },
                     ) { Icon(Icons.Default.UploadFile, "음성 파일 가져오기") }
-                    IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "설정") }
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, "설정") }
                 },
             )
         },
@@ -221,10 +220,6 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
         }
     }
 
-    if (showSettings) SettingsDialog(
-        onDismiss = { showSettings = false },
-        onReport = { showSettings = false; report = ReportRequest() },
-    )
     report?.let { r -> ErrorReportDialog(r.crash, r.engineError, onDismiss = { report = null }) }
 }
 
@@ -248,81 +243,6 @@ fun ModelRow(spec: ModelSpec, tick: Int) {
         }
         if (!ready && progress != null) LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth())
     }
-}
-
-@Composable
-fun SettingsDialog(onDismiss: () -> Unit, onReport: () -> Unit = {}) {
-    val settings = MeetingEngine.settings
-    var llm by remember { mutableStateOf(settings.llm) }
-    var stt by remember { mutableStateOf(settings.whisper) }
-    var threads by remember { mutableIntStateOf(settings.threads) }
-    var vocab by remember { mutableStateOf(settings.vocabulary) }
-    var tick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }
-    val focus = LocalFocusManager.current
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        // 가로 태블릿에서 키보드가 저장 버튼을 가리지 않도록 키보드 높이만큼 창을 줄임
-        properties = DialogProperties(decorFitsSystemWindows = false),
-        modifier = Modifier.imePadding(),
-        confirmButton = {
-            TextButton(onClick = {
-                settings.llm = llm; settings.whisper = stt; settings.threads = threads; settings.vocabulary = vocab; onDismiss()
-            }) { Text("저장") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
-        title = { Text("설정") },
-        text = {
-            Column(
-                Modifier.widthIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("용어 사전", fontWeight = FontWeight.SemiBold)
-                OutlinedTextField(
-                    vocab, { vocab = it }, Modifier.fillMaxWidth(),
-                    placeholder = { Text("예: 에이전트 하네스, 김민수, 쿠버네티스, OKR") },
-                    supportingText = { Text("회사명·인명·전문용어를 쉼표로 구분. 음성인식과 회의록 표기에 반영됩니다.") },
-                    minLines = 2,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-                )
-                Text("회의록 요약 모델", fontWeight = FontWeight.SemiBold)
-                ModelCatalog.llms.forEach { spec ->
-                    Row(
-                        Modifier.fillMaxWidth().selectable(llm == spec, onClick = { llm = spec }),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(llm == spec, onClick = { llm = spec })
-                        Column(Modifier.weight(1f)) { ModelRow(spec, tick) }
-                    }
-                }
-                Text("음성인식 모델", fontWeight = FontWeight.SemiBold)
-                ModelCatalog.whispers.forEach { spec ->
-                    Row(
-                        Modifier.fillMaxWidth().selectable(stt == spec, onClick = { stt = spec }),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(stt == spec, onClick = { stt = spec })
-                        Column(Modifier.weight(1f)) { ModelRow(spec, tick) }
-                    }
-                }
-                Text(
-                    "이 기기(Snapdragon 870) 실측: 고정밀 모델은 문자 오류가 적지만(1.9% → 0%) 녹음 시간의 약 0.75배가 걸려 " +
-                        "실시간 인식 여유가 작고 배터리 소모가 큽니다. 표준으로 녹음하고, 중요한 회의만 상세 화면의 " +
-                        "'고정밀 다시 인식'을 쓰는 것을 권장합니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                ModelRow(ModelCatalog.VAD, tick)
-                Text("CPU 스레드: $threads", fontWeight = FontWeight.SemiBold)
-                Slider(threads.toFloat(), { threads = it.toInt() }, valueRange = 2f..8f, steps = 5)
-                Text("이 기기(Snapdragon 870)는 고성능 코어 4개를 쓰는 4스레드가 가장 빠릅니다.",
-                    style = MaterialTheme.typography.bodySmall)
-                Text("문제 보고", fontWeight = FontWeight.SemiBold)
-                OutlinedButton(onClick = onReport) { Text("오류 보고 보내기 (GitHub)") }
-            }
-        },
-    )
 }
 
 data class ReportRequest(val crash: ErrorReporter.Crash? = null, val engineError: String? = null)

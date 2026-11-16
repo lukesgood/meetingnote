@@ -359,7 +359,7 @@ class Settings(context: Context) {
 
     /** Snapdragon 870: 빅코어(A77) 4개 사용 시 가장 빠름 (8스레드는 오히려 느림) */
     var threads: Int
-        get() = prefs.getInt("threads", 4)
+        get() = prefs.getInt("threads", DeviceInfo.recommendedThreads)
         set(v) = prefs.edit().putInt("threads", v).apply()
 
     // 오실로스코프 손잡이 (0..10 단계, TIME/DIV는 TimeDiv 인덱스)

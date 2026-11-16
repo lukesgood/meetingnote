@@ -25,6 +25,7 @@ import java.io.File
 sealed interface Screen {
     data object Home : Screen
     data object Live : Screen
+    data object Settings : Screen
     data class Detail(val id: String) : Screen
 }
 
@@ -56,7 +57,9 @@ class MainActivity : ComponentActivity() {
                         onRecord = ::requestRecord,
                         onOpen = { screen = Screen.Detail(it) },
                         onOpenLive = { screen = Screen.Live },
+                        onOpenSettings = { screen = Screen.Settings },
                     )
+                    Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Home })
                     Screen.Live -> LiveScreen(
                         onDone = { id -> screen = if (id != null) Screen.Detail(id) else Screen.Home },
                         onBack = { screen = Screen.Home },
