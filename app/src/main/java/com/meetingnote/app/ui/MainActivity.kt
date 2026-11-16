@@ -46,11 +46,7 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
 
         setContent {
-            val dark = isSystemInDarkTheme()
-            MaterialTheme(
-                colorScheme = if (dark) darkColorScheme(primary = Color(0xFF8AB4F8))
-                else lightColorScheme(primary = Color(0xFF1A5FD0))
-            ) {
+            MeetingNoteTheme {
                 BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
                 when (val s = screen) {
                     Screen.Home -> HomeScreen(

@@ -56,10 +56,20 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Event
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import com.meetingnote.app.MeetingEngine
 import com.meetingnote.app.formatTime
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
     val ctx = LocalContext.current
@@ -79,10 +89,8 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
 
     Scaffold(topBar = {
         TopAppBar(
-            title = {
-                Text(meeting.title, maxLines = 1,
-                    modifier = Modifier.clickable { renaming = true })
-            },
+            title = {},
+            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로") } },
             actions = {
                 IconButton(onClick = {
@@ -104,11 +112,20 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
         )
     }) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // 헤더: 제목(눌러서 수정) + 정보 배지
             Text(
-                "${formatDate(meeting.createdAt)} · ${formatTime(meeting.durationMs)}" +
-                        (meeting.sttModel?.let { " · 인식 ${it.substringBefore(" (")}" } ?: "") + (meeting.modelUsed?.let { " · 요약 ${it.substringBefore(" (")}" } ?: "") + (meeting.stats?.let { "\n$it" } ?: ""),
-                style = MaterialTheme.typography.bodySmall,
+                meeting.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { renaming = true },
             )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val c = MaterialTheme.colorScheme
+                Badge(Icons.Default.Event, formatDate(meeting.createdAt), c.surfaceContainerHigh, c.onSurface)
+                Badge(Icons.Default.Schedule, formatTime(meeting.durationMs), c.surfaceContainerHigh, c.onSurface)
+                meeting.sttModel?.let { Badge(Icons.Default.GraphicEq, "인식 " + it.substringBefore(" ("), c.surfaceContainerHigh, c.onSurface) }
+                meeting.modelUsed?.let { Badge(Icons.Default.AutoAwesome, "요약 " + it.substringBefore(" ("), c.surfaceContainerHigh, c.onSurface) }
+                meeting.stats?.let { Badge(null, it, c.surfaceContainerHigh, c.onSurfaceVariant) }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     enabled = !engine.busy && transcript.isNotEmpty(),
@@ -131,8 +148,12 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                                     repo.saveMinutes(id, editText); editing = false; version++
                                 }) { Icon(Icons.Default.Check, null); Text(" 저장") }
                             } else {
+                                TextButton(onClick = {
+                                    ctx.getSystemService(android.content.ClipboardManager::class.java)
+                                        .setPrimaryClip(android.content.ClipData.newPlainText(meeting.title, minutes))
+                                }) { Icon(Icons.Default.ContentCopy, null); Text(" 복사") }
                                 TextButton(enabled = !engine.busy, onClick = { editing = true }) {
-                                    Icon(Icons.Default.Edit, null); Text(" 회의록 편집")
+                                    Icon(Icons.Default.Edit, null); Text(" 편집")
                                 }
                             }
                         }
@@ -163,11 +184,11 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Column(Modifier.weight(1.4f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("회의록", style = MaterialTheme.typography.titleMedium)
-                            Card(Modifier.fillMaxSize()) { minutesPane() }
+                            Card(Modifier.fillMaxSize(), colors = paneColors(), border = paneBorder()) { minutesPane() }
                         }
                         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("녹취록 (${transcript.size})", style = MaterialTheme.typography.titleMedium)
-                            Card(Modifier.fillMaxSize()) { transcriptPane() }
+                            Card(Modifier.fillMaxSize(), colors = paneColors(), border = paneBorder()) { transcriptPane() }
                         }
                     }
                 } else {
@@ -176,7 +197,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                             Tab(tab == 0, { tab = 0 }, text = { Text("회의록") })
                             Tab(tab == 1, { tab = 1 }, text = { Text("녹취록 (${transcript.size})") })
                         }
-                        Card(Modifier.fillMaxSize()) { if (tab == 0) minutesPane() else transcriptPane() }
+                        Card(Modifier.fillMaxSize(), colors = paneColors(), border = paneBorder()) { if (tab == 0) minutesPane() else transcriptPane() }
                     }
                 }
             }
@@ -207,29 +228,46 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
     )
 }
 
-/** 회의록용 간단한 마크다운 렌더러 (제목, 글머리표, 굵게) */
+@Composable
+private fun paneColors() = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+
+@Composable
+private fun paneBorder() = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+
+/** 회의록용 마크다운 렌더러: 섹션 제목(강조 막대), 글머리표, 굵게 */
 @Composable
 fun MarkdownText(md: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        var first = true
         md.lines().forEach { raw ->
             val line = raw.trimEnd()
             when {
-                line.startsWith("#") -> Text(
-                    inlineBold(line.trimStart('#').trim()),
-                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp),
-                )
+                line.startsWith("#") -> {
+                    Row(
+                        Modifier.padding(top = if (first) 0.dp else 14.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.foundation.layout.Box(
+                            Modifier.size(width = 4.dp, height = 20.dp)
+                                .background(MaterialTheme.colorScheme.primary, androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(inlineBold(line.trimStart('#').trim()), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
                 line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") -> {
                     val indent = (line.length - line.trimStart().length) / 2
-                    Row(Modifier.padding(start = (indent * 16).dp)) {
-                        Text("•  ")
-                        Text(inlineBold(line.trimStart().substring(2)))
+                    Row(Modifier.padding(start = (14 + indent * 16).dp)) {
+                        Text("•", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.width(16.dp), style = MaterialTheme.typography.bodyLarge)
+                        Text(inlineBold(line.trimStart().substring(2)), style = MaterialTheme.typography.bodyLarge)
                     }
                 }
                 line.isBlank() -> {}
                 line.trim() == "---" -> HorizontalDivider()
-                else -> Text(inlineBold(line))
+                else -> Text(inlineBold(line), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 14.dp))
             }
+            if (line.isNotBlank()) first = false
         }
     }
 }

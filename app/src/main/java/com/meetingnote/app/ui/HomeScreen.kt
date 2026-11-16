@@ -57,6 +57,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -97,6 +102,19 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
     var tick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(state.phase, tick) { meetings = MeetingEngine.repo.list() }
+    // 검색과 회의 요약 미리보기
+    var query by remember { mutableStateOf("") }
+    var previews by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(meetings) {
+        previews = withContext(Dispatchers.IO) {
+            meetings.associate { m -> m.id to (MeetingEngine.repo.loadMinutes(m.id)?.let(::summaryPreview) ?: "") }
+        }
+    }
+    val shown = remember(meetings, previews, query) {
+        val q = query.trim()
+        if (q.isEmpty()) meetings
+        else meetings.filter { it.title.contains(q, true) || (previews[it.id] ?: "").contains(q, true) }
+    }
     LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }   // 다운로드 진행률 갱신
 
     val requiredMissing = (listOf(MeetingEngine.settings.whisper, ModelCatalog.VAD, MeetingEngine.settings.llm))
@@ -107,6 +125,7 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
         topBar = {
             TopAppBar(
                 title = { Text("회의노트", fontWeight = FontWeight.Bold) },
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 actions = {
                     IconButton(
                         enabled = !state.busy,
@@ -188,33 +207,48 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                     }
                 }
             }
+            // 헤더: 통계 + 검색
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Text("회의 기록", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                val totalMin = meetings.sumOf { it.durationMs } / 60_000
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("회의 기록", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            "회의 ${meetings.size}개 · 총 " + (if (totalMin >= 60) "${totalMin / 60}시간 ${totalMin % 60}분" else "${totalMin}분") + " 녹음",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (meetings.isNotEmpty()) OutlinedTextField(
+                        query, { query = it },
+                        Modifier.widthIn(min = 200.dp, max = 420.dp),
+                        placeholder = { Text("제목·요약 검색") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "지우기") } },
+                        singleLine = true,
+                        shape = RoundedCornerShape(28.dp),
+                    )
+                }
             }
             if (meetings.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
-                Text("아직 기록이 없습니다. 아래 버튼으로 회의 녹음을 시작하세요.",
-                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 24.dp))
+                Column(Modifier.fillMaxWidth().padding(vertical = 64.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Mic, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text("아직 회의 기록이 없습니다", style = MaterialTheme.typography.titleMedium)
+                    Text("'회의 녹음 시작'을 누르거나, 위의 가져오기 버튼으로 음성 파일을 불러오세요.",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else if (shown.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("'$query'에 해당하는 회의가 없습니다.", Modifier.padding(vertical = 32.dp),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            items(meetings, key = { it.id }) { m ->
-                Card(Modifier.fillMaxWidth().clickable { onOpen(m.id) }) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (m.hasMinutes) Icons.Default.Description else Icons.Default.Mic, null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.size(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(m.title, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                "${formatTime(m.durationMs)} · " + when {
-                                    m.hasMinutes -> "회의록 완료"
-                                    m.recovered -> "비정상 종료 후 복구됨 · '다시 인식' 권장"
-                                    else -> "녹취록만 있음"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
+            // 날짜별 묶음
+            shown.groupBy { dateGroup(it.createdAt) }.forEach { (group, list) ->
+                item(span = { GridItemSpan(maxLineSpan) }, key = "g_$group") {
+                    Text(group, Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
+                items(list, key = { it.id }) { m ->
+                    MeetingCard(m, previews[m.id] ?: "", onClick = { onOpen(m.id) })
                 }
             }
         }
