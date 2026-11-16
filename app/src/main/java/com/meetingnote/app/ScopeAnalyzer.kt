@@ -35,12 +35,27 @@ object VoiceThreshold {
     }
 }
 
+/** TIME/DIV 단계 (가로 10칸). 화면 전체 폭 = 10 × ms/DIV */
+object TimeDiv {
+    val msPerDiv = intArrayOf(2, 5, 10, 25)
+    const val DEFAULT = 1
+    fun label(i: Int) = "${msPerDiv[i.coerceIn(0, msPerDiv.lastIndex)]} ms/DIV"
+}
+
 class ScopeAnalyzer {
     private val historyLen = 100       // 10초
     private val history = FloatArray(historyLen) { VoiceThreshold.FLOOR_DB }
     private var head = 0
-    private val waveSamples = 800      // 50ms 표시 창
     private val wavePoints = 400
+
+    // 최근 샘플 링버퍼: 가장 넓은 창(25ms/DIV = 250ms) + 트리거 탐색 여유
+    private val ringLen = 16_000 * 400 / 1000
+    private val ring = ShortArray(ringLen)
+    private var ringHead = 0
+    private var ringFilled = 0
+
+    /** UI에서 바꾸는 TIME/DIV 단계 */
+    @Volatile var timeDivIndex = TimeDiv.DEFAULT
 
     fun push(frame: ShortArray): ScopeData {
         var sum = 0.0
@@ -54,16 +69,29 @@ class ScopeAnalyzer {
         var hold = VoiceThreshold.FLOOR_DB
         for (i in historyLen - 5 until historyLen) hold = max(hold, ordered[i])
 
-        // 트리거: 앞쪽 절반에서 첫 상승 영점(약한 히스테리시스) 찾기
-        var start = 0
-        val searchEnd = (frame.size - waveSamples).coerceAtLeast(0)
-        for (i in 1 until searchEnd) {
-            if (frame[i - 1] < -64 && frame[i] >= 0) { start = i; break }
+        for (v in frame) { ring[ringHead] = v; ringHead = (ringHead + 1) % ringLen }
+        ringFilled = minOf(ringLen, ringFilled + frame.size)
+
+        val window = 16_000 * TimeDiv.msPerDiv[timeDivIndex.coerceIn(0, TimeDiv.msPerDiv.lastIndex)] * 10 / 1000
+        val avail = ringFilled
+        // i번째(오래된 것부터) 샘플
+        fun at(i: Int): Int = ring[((ringHead - avail + i) % ringLen + ringLen) % ringLen].toInt()
+
+        // 트리거: 최신 창이 끝나기 직전까지 범위에서 마지막 상승 영점을 찾아 화면이 흔들리지 않게 정렬
+        val latestStart = (avail - window).coerceAtLeast(0)
+        val searchFrom = (latestStart - 1600).coerceAtLeast(1)
+        var start = latestStart
+        for (i in latestStart downTo searchFrom) {
+            if (at(i - 1) < -64 && at(i) >= 0) { start = i; break }
         }
-        val n = minOf(waveSamples, frame.size - start)
+        val n = minOf(window, avail - start)
+        // 창이 넓으면 칸마다 절대값이 가장 큰 샘플을 골라 포락선을 보존 (단순 추출은 파형이 뭉개짐)
         val wave = FloatArray(wavePoints) { p ->
-            val idx = start + (p.toLong() * n / wavePoints).toInt()
-            if (idx < frame.size) frame[idx] / 32768f else 0f
+            val from = start + (p.toLong() * n / wavePoints).toInt()
+            val to = maxOf(from + 1, start + ((p + 1).toLong() * n / wavePoints).toInt())
+            var best = 0
+            for (i in from until minOf(to, avail)) { val v = at(i); if (kotlin.math.abs(v) > kotlin.math.abs(best)) best = v }
+            best / 32768f
         }
         return ScopeData(wave, ordered, db, hold)
     }

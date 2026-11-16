@@ -23,6 +23,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import com.meetingnote.app.TimeDiv
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,11 +93,20 @@ fun ScopeView(data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier, 
         spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessLow), label = "needle",
     )
 
+    // 손잡이 값 (설정에 저장, 다음 녹음에도 유지)
+    val settings = com.meetingnote.app.MeetingEngine.settings
+    var intensity by remember { mutableIntStateOf(settings.scopeIntensity) }
+    var focus by remember { mutableIntStateOf(settings.scopeFocus) }
+    var timeDiv by remember { mutableIntStateOf(settings.scopeTimeDiv) }
+
+    // INTENSITY가 높을수록 잔상이 길게 남음 (2~7장)
+    val trailLen = 2 + intensity / 2
     val trail = remember { ArrayDeque<FloatArray>() }
     if (data != null && (trail.isEmpty() || trail.last() !== data.wave)) {
         trail.addLast(data.wave)
-        while (trail.size > 5) trail.removeFirst()
     }
+    while (trail.size > trailLen) trail.removeFirst()
+    val beam = Beam(intensity / 10f, focus / 10f)
 
     val crt: @Composable (Modifier, androidx.compose.ui.unit.Dp) -> Unit = { m, h ->
         Column(m, verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -101,16 +122,16 @@ fun ScopeView(data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier, 
                     val n = trail.size
                     trail.forEachIndexed { i, w ->
                         val age = n - 1 - i
-                        drawTrace(w, phosphor, if (age == 0) 1f else 0.30f / age, glow = age == 0)
+                        drawTrace(w, phosphor, if (age == 0) 1f else 0.30f / age, glow = age == 0, beam)
                     }
-                    if (trail.isEmpty()) drawTrace(FloatArray(2), phosphor, 0.8f, glow = true)
+                    if (trail.isEmpty()) drawTrace(FloatArray(2), phosphor, 0.8f, glow = true, beam)
                     drawHistory(data?.history, phosphor)
                     drawScanlinesAndReflection()
                     drawReadout(data, paused, phosphor)
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PanelLabel("CH1  MIC  ·  50 ms/DIV")
+                PanelLabel("CH1  MIC  ·  ${TimeDiv.label(timeDiv)}")
                 Spacer(Modifier.weight(1f))
                 PanelLabel("MEETINGNOTE  MN-1")
             }
@@ -164,9 +185,15 @@ fun ScopeView(data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier, 
                     meter(Modifier.fillMaxWidth().height(150.dp))
                     status()
                     Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                        Knob("INTENSITY", 0.62f)
-                        Knob("FOCUS", 0.45f)
-                        Knob("TIME/DIV", 0.3f)
+                        Knob("INTENSITY", intensity, 10, "$intensity") {
+                            intensity = it; settings.scopeIntensity = it
+                        }
+                        Knob("FOCUS", focus, 10, "$focus") {
+                            focus = it; settings.scopeFocus = it
+                        }
+                        Knob("TIME/DIV", timeDiv, TimeDiv.msPerDiv.lastIndex, "${TimeDiv.msPerDiv[timeDiv]}ms") {
+                            timeDiv = it; com.meetingnote.app.MeetingEngine.setScopeTimeDiv(it)
+                        }
                     }
                 }
             }
@@ -189,27 +216,61 @@ private const val METER_MAX = 0f
 private fun PanelLabel(t: String) =
     Text(t, color = Ink.copy(alpha = 0.8f), fontSize = 10.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
 
+/**
+ * 동작하는 손잡이: 탭하면 한 단계 증가(최대에서 처음으로), 위아래로 끌면 연속 조절.
+ * 단계가 바뀔 때마다 짧은 진동.
+ */
 @Composable
-private fun Knob(label: String, pos: Float) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Canvas(Modifier.size(40.dp)) {
-            val r = size.minDimension / 2
-            // 눈금 링
-            for (i in 0..10) {
-                val a = (135 + i * 27) * PI / 180
-                drawLine(Ink.copy(alpha = 0.6f),
-                    center + Offset((cos(a) * r).toFloat(), (sin(a) * r).toFloat()),
-                    center + Offset((cos(a) * r * 0.86f).toFloat(), (sin(a) * r * 0.86f).toFloat()), 1.5f)
+private fun Knob(label: String, step: Int, maxStep: Int, valueText: String, onChange: (Int) -> Unit) {
+    val haptic = LocalHapticFeedback.current
+    val current by rememberUpdatedState(step)
+    val change by rememberUpdatedState(onChange)
+    val stepPx = with(LocalDensity.current) { 18.dp.toPx() }
+    fun set(v: Int) {
+        val nv = v.coerceIn(0, maxStep)
+        if (nv != current) { change(nv); haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+    }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .semantics { contentDescription = "$label $valueText, 탭하거나 위아래로 끌어 조절" }
+            .pointerInput(maxStep) {
+                detectTapGestures { set(if (current >= maxStep) 0 else current + 1) }
             }
-            drawCircle(Brush.radialGradient(listOf(Color(0xFF5A5A58), Color(0xFF1E1E1D)), center, r * 0.8f), r * 0.78f)
-            drawCircle(Brush.linearGradient(listOf(Color(0xFF6E6E6B), Color(0xFF232322))), r * 0.62f)
+            .pointerInput(maxStep) {
+                var acc = 0f
+                detectVerticalDragGestures(onDragStart = { acc = 0f }) { _, dy ->
+                    acc -= dy                                   // 위로 끌면 증가
+                    while (acc >= stepPx) { set(current + 1); acc -= stepPx }
+                    while (acc <= -stepPx) { set(current - 1); acc += stepPx }
+                }
+            },
+    ) {
+        val pos = if (maxStep == 0) 0f else step.toFloat() / maxStep
+        Canvas(Modifier.size(44.dp)) {
+            val r = size.minDimension / 2
+            // 눈금 링 (단계 수만큼)
+            for (i in 0..maxStep) {
+                val a = (135 + i * 270f / maxStep) * PI / 180
+                val on = i <= step
+                drawLine(Ink.copy(alpha = if (on) 0.85f else 0.35f),
+                    center + Offset((cos(a) * r).toFloat(), (sin(a) * r).toFloat()),
+                    center + Offset((cos(a) * r * 0.84f).toFloat(), (sin(a) * r * 0.84f).toFloat()), if (on) 2f else 1.5f)
+            }
+            drawCircle(Color.Black.copy(alpha = 0.25f), r * 0.78f, center + Offset(2f, 3f))   // 그림자
+            drawCircle(Brush.radialGradient(listOf(Color(0xFF5A5A58), Color(0xFF1E1E1D)), center, r * 0.8f), r * 0.76f)
+            drawCircle(Brush.linearGradient(listOf(Color(0xFF7A7A76), Color(0xFF232322))), r * 0.6f)
             val a = (135 + pos * 270) * PI / 180
-            drawLine(Color(0xFFEDEDED), center + Offset((cos(a) * r * 0.2f).toFloat(), (sin(a) * r * 0.2f).toFloat()),
-                center + Offset((cos(a) * r * 0.58f).toFloat(), (sin(a) * r * 0.58f).toFloat()), 3f, cap = StrokeCap.Round)
+            drawLine(Color(0xFFF2F2F2), center + Offset((cos(a) * r * 0.18f).toFloat(), (sin(a) * r * 0.18f).toFloat()),
+                center + Offset((cos(a) * r * 0.56f).toFloat(), (sin(a) * r * 0.56f).toFloat()), 3f, cap = StrokeCap.Round)
         }
         Text(label, color = Ink, fontSize = 9.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+        Text(valueText, color = Ink.copy(alpha = 0.7f), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
     }
 }
+
+/** 빔 설정: INTENSITY(밝기 0..1), FOCUS(선명도 0..1) */
+private class Beam(val intensity: Float, val focus: Float)
 
 // ---------------- CRT ----------------
 
@@ -238,8 +299,11 @@ private fun DrawScope.drawGraticule(c: Color) {
     }
 }
 
-/** 작은 음성도 보이도록 6배 증폭 후 tanh로 부드럽게 압축 */
-private fun DrawScope.drawTrace(w: FloatArray, c: Color, alpha: Float, glow: Boolean) {
+/**
+ * 작은 음성도 보이도록 6배 증폭 후 tanh로 부드럽게 압축.
+ * INTENSITY: 전체 밝기, FOCUS: 높을수록 가늘고 선명, 낮을수록 굵고 번짐.
+ */
+private fun DrawScope.drawTrace(w: FloatArray, c: Color, alpha: Float, glow: Boolean, beam: Beam) {
     val mid = size.height * 0.44f
     val amp = size.height * 0.36f
     val path = Path()
@@ -248,15 +312,17 @@ private fun DrawScope.drawTrace(w: FloatArray, c: Color, alpha: Float, glow: Boo
         val y = mid - tanh(w[i] * 6f) * amp
         if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
     }
+    val a = alpha * (0.25f + 0.75f * beam.intensity)
+    val blur = 1f - beam.focus                       // 0 = 선명, 1 = 흐림
     val round = { width: Float -> Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round) }
     if (glow) {
-        // 형광체 번짐(bloom)
-        drawPath(path, c.copy(alpha = alpha * 0.07f), style = round(26f))
-        drawPath(path, c.copy(alpha = alpha * 0.16f), style = round(12f))
-        drawPath(path, c.copy(alpha = alpha * 0.45f), style = round(5f))
-        drawPath(path, Color.White.copy(alpha = alpha * 0.55f), style = round(1.2f))   // 빔 중심의 하얀 코어
+        // 형광체 번짐(bloom): 초점이 흐릴수록 넓고 진하게
+        drawPath(path, c.copy(alpha = a * (0.05f + 0.08f * blur)), style = round(14f + 30f * blur))
+        drawPath(path, c.copy(alpha = a * (0.12f + 0.12f * blur)), style = round(6f + 14f * blur))
+        drawPath(path, c.copy(alpha = a * 0.45f), style = round(3f + 6f * blur))
+        drawPath(path, Color.White.copy(alpha = a * 0.6f * beam.focus), style = round(1.1f))   // 빔 중심의 하얀 코어
     }
-    drawPath(path, c.copy(alpha = alpha), style = round(2.4f))
+    drawPath(path, c.copy(alpha = a), style = round(1.6f + 3.4f * blur))
 }
 
 /** CRT 하단에 최근 10초 음량을 형광 막대로 표시 */

@@ -57,6 +57,9 @@ object MeetingEngine {
     private val _scope = MutableStateFlow<ScopeData?>(null)
     val scopeData: StateFlow<ScopeData?> = _scope
     private var scopeAnalyzer = ScopeAnalyzer()
+
+    /** 오실로스코프 TIME/DIV 변경 (녹음 중 즉시 반영, 설정에 저장) */
+    fun setScopeTimeDiv(i: Int) { settings.scopeTimeDiv = i; scopeAnalyzer.timeDivIndex = i }
     /** 추론 전용 스레드 (빅코어 4개를 ggml 스레드풀이 사용) */
     private val inference = Dispatchers.Default.limitedParallelism(1)
 
@@ -130,7 +133,7 @@ object MeetingEngine {
                     },
                 )
                 transcriber = t
-                scopeAnalyzer = ScopeAnalyzer(); _scope.value = null
+                scopeAnalyzer = ScopeAnalyzer().also { it.timeDivIndex = settings.scopeTimeDiv }; _scope.value = null
                 val r = AudioRecorder(
                     repo.audioFile(meeting.id),
                     onFrames = { f ->
@@ -358,4 +361,15 @@ class Settings(context: Context) {
     var threads: Int
         get() = prefs.getInt("threads", 4)
         set(v) = prefs.edit().putInt("threads", v).apply()
+
+    // 오실로스코프 손잡이 (0..10 단계, TIME/DIV는 TimeDiv 인덱스)
+    var scopeIntensity: Int
+        get() = prefs.getInt("scope_intensity", 7)
+        set(v) = prefs.edit().putInt("scope_intensity", v).apply()
+    var scopeFocus: Int
+        get() = prefs.getInt("scope_focus", 7)
+        set(v) = prefs.edit().putInt("scope_focus", v).apply()
+    var scopeTimeDiv: Int
+        get() = prefs.getInt("scope_timediv", TimeDiv.DEFAULT)
+        set(v) = prefs.edit().putInt("scope_timediv", v).apply()
 }

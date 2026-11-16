@@ -94,24 +94,32 @@ class StreamingTranscriber(
     }
 
     private fun process(offsetSamples: Long, pcm: FloatArray) {
-        // 가장 큰 100ms 구간의 RMS로 무음 판단 (평균으로 판단하면 조용한 화자의 발언이 통째로 누락될 수 있음)
-        var peakRms = 0.0
+        // 100ms 구간별 RMS
+        val frames = ArrayList<Double>(pcm.size / frame + 1)
         var i = 0
         while (i < pcm.size) {
             val end = minOf(i + frame, pcm.size)
             var e = 0.0
             for (j in i until end) e += pcm[j] * pcm[j]
-            peakRms = maxOf(peakRms, sqrt(e / (end - i)))
+            frames += sqrt(e / (end - i))
             i = end
         }
+        val sorted = frames.sorted()
+        val peakRms = sorted.lastOrNull() ?: 0.0
+        val noiseFloor = sorted.getOrElse(sorted.size / 5) { 0.0 }          // 하위 20% = 배경 소음
+        // 말소리 구간: -48dBFS 이상이면서 배경 소음보다 12dB 이상 큰 100ms 구간
+        val speechFrames = frames.count { it >= 0.004 && it >= noiseFloor * 4 }
         val audioMs = pcm.size * 1000L / sr
-        if (peakRms < 0.004 || pcm.size < sr / 2) {   // 가장 큰 구간도 -48dBFS 미만이면 무음
-            Log.i("Transcriber", "chunk ${audioMs}ms skipped (peak %.4f)".format(peakRms))
+        // 말소리가 0.3초 미만이면 무음/잡음으로 보고 건너뜀 (클릭·기침 한 번에 증폭+환각이 생기는 것 방지)
+        if (speechFrames < 3 || pcm.size < sr / 2) {
+            Log.i("Transcriber", "chunk ${audioMs}ms skipped (peak %.4f, floor %.4f, speech %d)".format(peakRms, noiseFloor, speechFrames))
             onChunkDone(audioMs, 0)
             return
         }
-        // 원거리·작은 목소리 보정: 가장 큰 구간이 약 -20dBFS가 되도록 증폭 (최대 10배, 클리핑 방지)
-        val gain = (0.1 / peakRms).coerceIn(1.0, 10.0).toFloat()
+        // 원거리·작은 목소리 보정: 가장 큰 구간이 약 -20dBFS가 되도록 증폭 (최대 10배).
+        // 단, 배경 소음이 -46dBFS를 넘지 않게 제한해 잡음을 말소리로 착각하지 않도록 함.
+        val noiseCap = if (noiseFloor > 1e-6) 0.005 / noiseFloor else 10.0
+        val gain = minOf(0.1 / peakRms, 10.0, noiseCap).coerceAtLeast(1.0).toFloat()
         if (gain > 1.05f) for (k in pcm.indices) pcm[k] = (pcm[k] * gain).coerceIn(-1f, 1f)
         val t0 = System.currentTimeMillis()
         val segs = try {
@@ -125,12 +133,42 @@ class StreamingTranscriber(
         }
         val procMs = System.currentTimeMillis() - t0
         val offsetMs = offsetSamples * 1000 / sr
-        val lines = segs.map { TranscriptLine(offsetMs + it.startMs, offsetMs + it.endMs, it.text) }
+        val lines = segs.filterNot { Hallucination.isLikely(it.text) }
+            .map { TranscriptLine(offsetMs + it.startMs, offsetMs + it.endMs, it.text) }
+        if (lines.size < segs.size) Log.i("Transcriber", "dropped ${segs.size - lines.size} hallucinated segment(s)")
         if (lines.isNotEmpty()) {
             lastText = lines.joinToString(" ") { it.text }
             onLines(lines)
         }
         Log.i("Transcriber", "chunk ${audioMs}ms -> ${procMs}ms (RTF %.2f)".format(procMs.toDouble() / audioMs))
         onChunkDone(audioMs, procMs)
+    }
+}
+
+/**
+ * Whisper가 무음·잡음에서 지어내는 대표 문구 (방송·유튜브 자막 학습의 부작용).
+ * 문장 전체가 이런 문구일 때만 제거하고, 실제 발언 안에 섞인 경우는 건드리지 않는다.
+ */
+object Hallucination {
+    private val patterns = listOf(
+        "시청해 ?주셔서 감사",
+        "시청해 ?주신 여러분",
+        "시청자 여러분",
+        "구독(과|과 좋아요| 좋아요|,? ?좋아요)",
+        "좋아요(와|,)? ?구독",
+        "알림 ?설정",
+        "다음 (영상|시간|주)에서 (만나|뵙)",
+        "(지금까지|이상) .{0,12}(뉴스|스토리|기자)",
+        "뉴스 스토리",
+        "MBC|KBS|SBS|YTN|JTBC",
+        "자막 (제공|제작)|한글자막|자막 by",
+        "^[(\\[].*[)\\]]$",                       // 문장 전체가 괄호: (박수), [음악], (두 번째 요리는)
+        "^(음악|박수|웃음)$",
+    ).map { Regex(it) }
+
+    fun isLikely(text: String): Boolean {
+        val t = text.trim().trimEnd('.', '!', '?', '~', ' ')
+        if (t.isEmpty()) return true
+        return t.length <= 40 && patterns.any { it.containsMatchIn(t) }
     }
 }
