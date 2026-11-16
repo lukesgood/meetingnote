@@ -12,8 +12,8 @@ android {
         applicationId = "com.meetingnote.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.1.8"
+        versionCode = 10
+        versionName = "0.1.9"
         ndk { abiFilters += "arm64-v8a" }
     }
 

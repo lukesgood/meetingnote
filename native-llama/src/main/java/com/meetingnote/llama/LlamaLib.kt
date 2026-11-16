@@ -1,7 +1,10 @@
 package com.meetingnote.llama
 
 data class GenerationStats(
+    /** 실제로 계산한 프롬프트 토큰 수 (재사용분 제외) */
     val promptTokens: Int, val promptMs: Long, val genTokens: Int, val genMs: Long,
+    /** KV 캐시에서 재사용한 앞부분 토큰 수 */
+    val reusedTokens: Int = 0,
 ) {
     val promptTps get() = if (promptMs > 0) promptTokens * 1000.0 / promptMs else 0.0
     val genTps get() = if (genMs > 0) genTokens * 1000.0 / genMs else 0.0
@@ -20,6 +23,12 @@ class LlamaModel private constructor(private var handle: Long) : AutoCloseable {
     fun formatChat(system: String?, user: String, assistantPrefix: String = ""): String =
         String(LlamaLib.nativeFormatChat(handle, system ?: "", user, assistantPrefix), Charsets.UTF_8)
 
+    /** 여러 턴 대화 (role: system/user/assistant) */
+    fun formatMessages(messages: List<Pair<String, String>>, assistantPrefix: String = ""): String =
+        String(LlamaLib.nativeFormatMessages(handle, messages.map { it.first }.toTypedArray(),
+            messages.map { it.second }.toTypedArray(), assistantPrefix), Charsets.UTF_8)
+
+    /** 앞 호출과 겹치는 프롬프트 앞부분은 KV 캐시를 재사용한다(자동). */
     fun generate(
         prompt: String,
         maxTokens: Int = 1024,
@@ -33,7 +42,7 @@ class LlamaModel private constructor(private var handle: Long) : AutoCloseable {
         }
         if (r.startsWith("error:")) throw IllegalStateException(r.removePrefix("error:"))
         val p = r.split(',').map { it.toLong() }
-        return GenerationStats(p[0].toInt(), p[1], p[2].toInt(), p[3])
+        return GenerationStats(p[0].toInt(), p[1], p[2].toInt(), p[3], p.getOrNull(4)?.toInt() ?: 0)
     }
 
     fun cancel() {
@@ -65,6 +74,7 @@ internal object LlamaLib {
     external fun nativeFree(handle: Long)
     external fun nativeCountTokens(handle: Long, text: String): Int
     external fun nativeFormatChat(handle: Long, system: String, user: String, assistantPrefix: String): ByteArray
+    external fun nativeFormatMessages(handle: Long, roles: Array<String>, contents: Array<String>, assistantPrefix: String): ByteArray
     external fun nativeCancel(handle: Long)
     external fun nativeGenerate(
         handle: Long, prompt: String, maxTokens: Int, temperature: Float, topP: Float,

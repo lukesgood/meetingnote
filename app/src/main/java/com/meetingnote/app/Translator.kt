@@ -23,6 +23,8 @@ class Translator(
     val pendingCount get() = pending.get()
     /** 앞 문장 문맥 (대명사·생략 해석용, 번역 대상 아님) */
     private val context = ArrayDeque<String>()
+    private var reusedTotal = 0L
+    private var computedTotal = 0L
 
     private val worker = scope.launch {
         for (line in queue) {
@@ -49,30 +51,40 @@ class Translator(
     }
 
     private fun translate(line: TranscriptLine): String {
-        val toKorean = line.lang == "en"
-        val target = if (toKorean) "Korean" else "English"
-        val system = "You are a professional Korean-English meeting interpreter. " +
-            "Translate the utterance into natural, concise $target as spoken in a business meeting. " +
-            "Keep names, numbers, dates and technical terms accurate. " +
-            "Output only the translation — no quotes, notes, or explanations."
+        val target = if (line.lang == "en") "Korean" else "English"
+        // 시스템 프롬프트는 방향과 무관하게 고정 → 매 요청의 공통 앞부분으로 KV 캐시 재사용.
+        // (이전 번역을 대화 턴으로 넣는 방식은 더 빠르지만 앞 문장 내용이 섞여 들어가 요일이 바뀌는 오류가 있었음)
         val user = buildString {
             if (context.isNotEmpty()) {
                 append("Previous lines (context only, do not translate):\n")
                 context.forEach { append("- ").append(it).append('\n') }
                 append('\n')
             }
-            append("Utterance:\n").append(line.text)
+            append("Translate to ").append(target).append(":\n").append(line.text)
         }
-        val prompt = llm.formatChat(system, user, spec.assistantPrefix)
+        val prompt = llm.formatChat(SYSTEM, user, spec.assistantPrefix)
         val maxTokens = (llm.countTokens(line.text) * 3 + 24).coerceIn(32, 256)
         val sb = StringBuilder()
-        llm.generate(prompt, maxTokens = maxTokens, temperature = 0.2f, repeatPenalty = 1.05f) {
+        val st = llm.generate(prompt, maxTokens = maxTokens, temperature = 0.2f, repeatPenalty = 1.05f) {
             sb.append(it); true
         }
         context.addLast(line.text); while (context.size > 2) context.removeFirst()
+        reusedTotal += st.reusedTokens; computedTotal += st.promptTokens
+        Log.i("Translator", "prompt reused=${st.reusedTokens} computed=${st.promptTokens} (${st.promptMs}ms) " +
+            "gen=${st.genTokens} (${st.genMs}ms) | total reuse ${reusedTotal * 100 / (reusedTotal + computedTotal).coerceAtLeast(1)}%")
         return Summarizer.stripThink(sb.toString())
             .lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
             .removePrefix("Translation:").removePrefix("번역:").trim()
             .trim('"', '“', '”', '\'')
+    }
+
+    private companion object {
+        /** 방향과 무관하게 고정 — 매 요청의 공통 앞부분이 되어 캐시로 재사용된다 */
+        const val SYSTEM = "You are a professional Korean-English meeting interpreter. " +
+            "Each request gives one utterance from a business meeting and the target language. " +
+            "Translate it into natural, concise spoken language. " +
+            "Previous lines, if given, are context only — never mix their content into the translation. " +
+            "Keep names, numbers, dates, times and technical terms accurate. " +
+            "Output only the translation — no quotes, notes, or explanations."
     }
 }

@@ -22,6 +22,9 @@ struct Session {
     const llama_vocab * vocab = nullptr;
     ggml_threadpool *   pool  = nullptr;
     std::atomic<bool>   cancel{false};
+    // KV 캐시에 현재 들어 있는 토큰 열 (다음 프롬프트와 겹치는 앞부분은 다시 계산하지 않음)
+    std::vector<llama_token> cached;
+    bool                reuse = true;
 };
 
 void log_cb(ggml_log_level level, const char * text, void *) {
@@ -97,6 +100,7 @@ Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring mo
     cp.n_threads_batch = threads;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
     cp.no_perf         = false;
+    cp.swa_full        = true;   // 슬라이딩 윈도 모델도 앞부분 재사용이 가능하도록
     llama_context * ctx = llama_init_from_model(model, cp);
     if (!ctx) { LOGE("failed to create context"); llama_model_free(model); return 0; }
 
@@ -112,6 +116,7 @@ Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring mo
     s->ctx   = ctx;
     s->pool  = pool;
     s->vocab = llama_model_get_vocab(model);
+    LOGI("n_swa=%d", llama_model_n_swa(model));
     return reinterpret_cast<jlong>(s);
 }
 
@@ -161,6 +166,42 @@ Java_com_meetingnote_llama_LlamaLib_nativeFormatChat(JNIEnv * env, jobject, jlon
     return to_bytes(env, out);
 }
 
+// 여러 턴 대화(roles[i], contents[i])를 채팅 템플릿으로 구성
+JNIEXPORT jbyteArray JNICALL
+Java_com_meetingnote_llama_LlamaLib_nativeFormatMessages(JNIEnv * env, jobject, jlong h,
+        jobjectArray roles, jobjectArray contents, jstring assistantPrefix) {
+    auto * s = reinterpret_cast<Session *>(h);
+    const jsize n = env->GetArrayLength(roles);
+    std::vector<std::string> r(n), c(n);
+    size_t total = 0;
+    for (jsize i = 0; i < n; ++i) {
+        auto jr = (jstring) env->GetObjectArrayElement(roles, i);
+        auto jc = (jstring) env->GetObjectArrayElement(contents, i);
+        r[i] = jstr(env, jr); c[i] = jstr(env, jc);
+        env->DeleteLocalRef(jr); env->DeleteLocalRef(jc);
+        total += c[i].size() + 64;
+    }
+    std::vector<llama_chat_message> msgs;
+    for (jsize i = 0; i < n; ++i) msgs.push_back({r[i].c_str(), c[i].c_str()});
+
+    const char * tmpl = llama_model_chat_template(s->model, nullptr);
+    std::vector<char> buf(total * 2 + 1024);
+    int len = llama_chat_apply_template(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int) buf.size());
+    if (len > (int) buf.size()) {
+        buf.resize(len + 1);
+        len = llama_chat_apply_template(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int) buf.size());
+    }
+    std::string out;
+    if (len < 0) {
+        for (jsize i = 0; i < n; ++i) out += "<|im_start|>" + r[i] + "\n" + c[i] + "<|im_end|>\n";
+        out += "<|im_start|>assistant\n";
+    } else {
+        out.assign(buf.data(), len);
+    }
+    out += jstr(env, assistantPrefix);
+    return to_bytes(env, out);
+}
+
 JNIEXPORT void JNICALL
 Java_com_meetingnote_llama_LlamaLib_nativeCancel(JNIEnv *, jobject, jlong h) {
     auto * s = reinterpret_cast<Session *>(h);
@@ -179,7 +220,7 @@ Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong 
     jmethodID onToken = env->GetMethodID(cbCls, "onToken", "([B)Z");
 
     mn::pin_current_thread((int) llama_n_threads(s->ctx));
-    llama_memory_clear(llama_get_memory(s->ctx), true);
+    llama_memory_t mem = llama_get_memory(s->ctx);
 
     auto toks = tokenize(s->vocab, jstr(env, prompt), true);
     const int n_ctx = (int) llama_n_ctx(s->ctx);
@@ -188,14 +229,32 @@ Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong 
         return env->NewStringUTF("error:prompt_too_long");
     }
 
+    // 직전 호출과 같은 앞부분(시스템 프롬프트·이전 대화)은 KV 캐시를 그대로 쓰고 나머지만 계산
+    size_t common = 0;
+    if (s->reuse) {
+        while (common < s->cached.size() && common < toks.size() && s->cached[common] == toks[common]) ++common;
+        if (common == toks.size() && common > 0) --common;   // 마지막 토큰은 로짓을 얻기 위해 다시 계산
+    }
+    if (common > 0 && !llama_memory_seq_rm(mem, 0, (llama_pos) common, -1)) {
+        LOGI("partial KV removal unsupported; disabling prefix reuse");
+        s->reuse = false;
+        common = 0;
+    }
+    if (common == 0) llama_memory_clear(mem, true);
+    s->cached.assign(toks.begin(), toks.begin() + common);
+    auto fail = [&](const char * msg) {
+        llama_memory_clear(mem, true);
+        s->cached.clear();
+        return env->NewStringUTF(msg);
+    };
+
     const int64_t t0 = ggml_time_us();
     const int n_batch = (int) llama_n_batch(s->ctx);
-    for (size_t i = 0; i < toks.size(); i += n_batch) {
+    for (size_t i = common; i < toks.size(); i += n_batch) {
         int n = std::min<int>(n_batch, (int) (toks.size() - i));
-        if (llama_decode(s->ctx, llama_batch_get_one(toks.data() + i, n)) != 0) {
-            return env->NewStringUTF("error:decode_failed");
-        }
-        if (s->cancel) return env->NewStringUTF("error:cancelled");
+        if (llama_decode(s->ctx, llama_batch_get_one(toks.data() + i, n)) != 0) return fail("error:decode_failed");
+        s->cached.insert(s->cached.end(), toks.begin() + i, toks.begin() + i + n);
+        if (s->cancel) return fail("error:cancelled");
     }
     const int64_t t1 = ggml_time_us();
 
@@ -227,13 +286,18 @@ Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong 
             pending.erase(0, ok);
             if (!cont) break;
         }
-        if (llama_decode(s->ctx, llama_batch_get_one(&tok, 1)) != 0) break;
+        if (llama_decode(s->ctx, llama_batch_get_one(&tok, 1)) != 0) {
+            llama_memory_clear(mem, true);
+            s->cached.clear();
+            break;
+        }
+        s->cached.push_back(tok);
     }
     const int64_t t2 = ggml_time_us();
     llama_sampler_free(smpl);
 
-    std::string perf = std::to_string(toks.size()) + "," + std::to_string((t1 - t0) / 1000) + "," +
-                       std::to_string(n_gen) + "," + std::to_string((t2 - t1) / 1000);
+    std::string perf = std::to_string(toks.size() - common) + "," + std::to_string((t1 - t0) / 1000) + "," +
+                       std::to_string(n_gen) + "," + std::to_string((t2 - t1) / 1000) + "," + std::to_string(common);
     LOGI("perf %s", perf.c_str());
     return env->NewStringUTF(perf.c_str());
 }
