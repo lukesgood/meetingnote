@@ -90,7 +90,6 @@ fun SettingsScreen(onBack: () -> Unit) {
     val settings = MeetingEngine.settings
     val engine by MeetingEngine.state.collectAsState()
     var llm by remember { mutableStateOf(settings.llm) }
-    var stt by remember { mutableStateOf(settings.whisper) }
     var tick by remember { mutableIntStateOf(0) }           // 다운로드 진행률·용량 갱신
     LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }
     var reporting by remember { mutableStateOf(false) }
@@ -104,19 +103,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     }) { pad ->
         val sttCard: @Composable () -> Unit = {
             SectionCard(Icons.Default.GraphicEq, "음성인식", "녹음을 글로 바꾸는 모델입니다.") {
-                ModelCatalog.whispers.forEach { spec ->
-                    ModelOption(spec, selected = stt == spec, tick = tick, busy = engine.busy,
-                        onSelect = { stt = spec; settings.whisper = spec },
-                        onDelete = { confirmDelete = spec })
-                }
-                Hint(
-                    if (DeviceInfo.isBenchmarkedDevice)
-                        "이 기기(${DeviceInfo.chipName}) 실측: 고정밀은 문자 오류가 1.9% → 0%로 줄지만 녹음 시간의 약 0.75배가 걸려 " +
-                            "실시간 여유가 작고 배터리 소모가 큽니다. 표준으로 녹음하고 중요한 회의만 '고정밀 다시 인식'을 권장합니다."
-                    else
-                        "고정밀 모델은 더 정확하지만 표준보다 약 2.6배 느립니다. 녹음 중 '인식 대기' 시간이 계속 늘어나면 표준을 쓰세요. " +
-                            "회의 상세 화면의 '고정밀 다시 인식'으로 필요한 회의만 다시 처리할 수도 있습니다."
-                )
+                ModelOption(ModelCatalog.WHISPER, selected = null, tick = tick, busy = engine.busy,
+                    onSelect = {}, onDelete = {})
                 HorizontalDivider()
                 ModelOption(ModelCatalog.VAD, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = { confirmDelete = ModelCatalog.VAD })
@@ -233,8 +221,8 @@ private fun ModelOption(
                         colors = AssistChipDefaults.assistChipColors(disabledLabelColor = MaterialTheme.colorScheme.primary),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
                     )
-                    // 사용 중(선택된) 모델과 처리 중에는 삭제 불가
-                    val canDelete = selected != true && !busy && spec != ModelCatalog.VAD
+                    // 선택 가능한 모델 중 사용하지 않는 것만 삭제 가능 (필수 모델·사용 중·처리 중에는 불가)
+                    val canDelete = selected == false && !busy
                     IconButton(onClick = onDelete, enabled = canDelete) {
                         Icon(Icons.Default.DeleteOutline, if (canDelete) "삭제" else "사용 중이라 삭제 불가")
                     }
@@ -353,7 +341,7 @@ private fun AboutCard(onReport: () -> Unit) {
             listOf(
                 "회의노트 앱" to "MIT",
                 "whisper.cpp · llama.cpp (ggml)" to "MIT",
-                "Whisper small / large-v3-turbo (OpenAI)" to "MIT",
+                "Whisper small (OpenAI)" to "MIT",
                 "Silero VAD" to "MIT",
                 "Qwen3 4B Instruct (Alibaba)" to "Apache-2.0",
                 "EXAONE 4.0 1.2B (LG AI Research)" to "EXAONE AI Model License (비상업)",

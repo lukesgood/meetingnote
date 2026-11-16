@@ -30,22 +30,7 @@ object ModelCatalog {
         url = "$HF/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin",
         sizeBytes = 264_464_607,
         kind = ModelSpec.Kind.STT,
-        note = "표준 · 빠름 (녹음 시간의 약 0.3배) · 배터리 소모 적음",
-    )
-
-    /**
-     * 고정밀 음성인식. 실측(Snapdragon 870): 녹음 시간의 0.74~0.76배, 깨끗한 음성 문자 오류율 0% (small 1.9%).
-     * 실시간 인식 여유가 24%로 작아 이 기기에서는 선택 옵션/고정밀 다시 인식용으로 제공.
-     * q5_0은 같은 기기에서 1.9배로 오히려 느려 q8_0 사용.
-     */
-    val WHISPER_TURBO = ModelSpec(
-        id = "whisper-large-v3-turbo-q8",
-        title = "Whisper large-v3-turbo (q8_0)",
-        fileName = "ggml-large-v3-turbo-q8_0.bin",
-        url = "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
-        sizeBytes = 874_188_075,
-        kind = ModelSpec.Kind.STT,
-        note = "고정밀 · 느림 (녹음 시간의 약 0.75배) · 배터리·발열 증가",
+        note = "한국어 음성인식 · 녹음 시간의 약 0.3배",
     )
 
     val VAD = ModelSpec(
@@ -79,9 +64,11 @@ object ModelCatalog {
         assistantPrefix = "<think>\n\n</think>\n\n",
     )
 
-    val whispers = listOf(WHISPER, WHISPER_TURBO)
     val llms = listOf(QWEN3_4B, EXAONE_1B)
-    val all = listOf(WHISPER, WHISPER_TURBO, VAD, QWEN3_4B, EXAONE_1B)
+    val all = listOf(WHISPER, VAD, QWEN3_4B, EXAONE_1B)
+
+    /** 이전 버전에서 제공했다가 삭제한 모델 파일 (앱 시작 시 정리) */
+    val removedFiles = listOf("ggml-large-v3-turbo-q8_0.bin")
 }
 
 class ModelStore(private val context: Context) {

@@ -89,6 +89,8 @@ object MeetingEngine {
         settings = Settings(app)
         // 앱이 녹음 중 비정상 종료된 경우: WAV 헤더 복구 + 부분 녹취록 유지
         if (!_state.value.busy) repo.recoverUnfinished()
+        // 삭제된 기능의 모델 파일 정리 (예: 고정밀 turbo 874MB)
+        ModelCatalog.removedFiles.forEach { java.io.File(models.dir, it).delete() }
         // 오류 보고용 동작 기록 (단계 변화만, 내용은 남기지 않음)
         scope.launch {
             state.map { it.phase }.distinctUntilChanged().collect { ErrorReporter.trail("단계: $it") }
@@ -184,7 +186,7 @@ object MeetingEngine {
 
     // ------------------------------------------------- 파일에서 인식 (가져오기/재인식)
 
-    /** @param sttSpec 사용할 음성인식 모델 (기본: 설정값, '고정밀 다시 인식'은 turbo) */
+    /** @param sttSpec 사용할 음성인식 모델 */
     fun transcribeFile(meetingId: String, thenSummarize: Boolean = true, sttSpec: ModelSpec = settings.whisper) {
         if (_state.value.busy) return
         val missing = missingSttModels(sttSpec)
@@ -349,9 +351,8 @@ class Settings(context: Context) {
         set(v) = prefs.edit().putString("llm", v.id).apply()
 
     /** 용어 사전: 회사명·인명·전문용어 (쉼표 구분). 음성인식 힌트와 회의록 표기 교정에 사용 */
-    var whisper: ModelSpec
-        get() = ModelCatalog.whispers.firstOrNull { it.id == prefs.getString("whisper", null) } ?: ModelCatalog.WHISPER
-        set(v) = prefs.edit().putString("whisper", v.id).apply()
+    /** 음성인식 모델 (고정밀 turbo 옵션은 실사용 오인식이 많아 삭제) */
+    val whisper: ModelSpec get() = ModelCatalog.WHISPER
 
     var vocabulary: String
         get() = prefs.getString("vocabulary", "") ?: ""

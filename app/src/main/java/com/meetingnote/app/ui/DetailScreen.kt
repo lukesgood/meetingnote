@@ -21,7 +21,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.HighQuality
 import com.meetingnote.app.ModelCatalog
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Edit
@@ -122,20 +121,6 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                     enabled = !engine.busy && repo.audioFile(id).exists(),
                     onClick = { MeetingEngine.transcribeFile(id); onOpenLive() },
                 ) { Icon(Icons.Default.Refresh, null); Text(" 다시 인식") }
-                // 고정밀 다시 인식: 설정이 표준 모델일 때만 별도 버튼 (모델이 없으면 받기 안내)
-                if (MeetingEngine.settings.whisper != ModelCatalog.WHISPER_TURBO) {
-                    val turboReady = MeetingEngine.models.isReady(ModelCatalog.WHISPER_TURBO)
-                    OutlinedButton(
-                        enabled = !engine.busy && repo.audioFile(id).exists() && turboReady,
-                        onClick = {
-                            MeetingEngine.transcribeFile(id, thenSummarize = minutes != null, sttSpec = ModelCatalog.WHISPER_TURBO)
-                            onOpenLive()
-                        },
-                    ) {
-                        Icon(Icons.Default.HighQuality, null)
-                        Text(if (turboReady) " 고정밀 다시 인식 (약 ${formatTime(meeting.durationMs * 3 / 4)})" else " 고정밀 다시 인식 (설정에서 모델 받기)")
-                    }
-                }
             }
             val minutesPane: @Composable () -> Unit = {
                     Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
