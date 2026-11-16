@@ -123,7 +123,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         }
         val vocabCard: @Composable () -> Unit = { VocabularyCard() }
-        val langCard: @Composable () -> Unit = { LanguageCard(llm) }
+        val langCard: @Composable () -> Unit = { LanguageCard(tick) }
         val perfCard: @Composable () -> Unit = { PerformanceCard() }
         val storageCard: @Composable () -> Unit = { StorageCard(tick) }
         val aboutCard: @Composable () -> Unit = { AboutCard(onReport = { reporting = true }) }
@@ -252,7 +252,7 @@ private fun ModelOption(
 
 /** 통역(한국어 ↔ 영어)과 회의록 언어 */
 @Composable
-private fun LanguageCard(llm: ModelSpec) {
+private fun LanguageCard(tick: Int) {
     val settings = MeetingEngine.settings
     var interpret by remember { mutableStateOf(settings.interpret) }
     var lang by remember { mutableStateOf(settings.minutesLang) }
@@ -265,11 +265,19 @@ private fun LanguageCard(llm: ModelSpec) {
             }
             Switch(interpret, { interpret = it; settings.interpret = it })
         }
-        if (interpret) Hint(
-            "번역은 '회의록 요약' 모델(${llm.title.substringBefore(" (")})로 기기 안에서 합니다. 녹음 중에도 모델이 메모리에 올라가 " +
-                "배터리 사용이 늘고, 문장이 끝난 뒤 번역이 뜨기까지 몇 초 더 걸립니다." +
-                if (llm == ModelCatalog.EXAONE_1B) "" else " 실시간 통역에는 더 빠른 EXAONE을 권장합니다."
-        )
+        if (interpret) {
+            val spec = ModelCatalog.INTERPRETER
+            val ready = remember(tick) { MeetingEngine.models.isReady(spec) }
+            Hint(
+                "번역은 회의록 요약 모델 설정과 상관없이 항상 ${spec.title.substringBefore(" (")}로 기기 안에서 합니다 " +
+                    "(EXAONE은 영어→한국어 번역 품질이 낮음). 녹음 중에도 모델이 메모리에 올라가 배터리 사용이 늘고, " +
+                    "문장이 끝난 뒤 번역이 뜨기까지 5초 정도 더 걸립니다."
+            )
+            if (!ready) Text(
+                "⚠ ${spec.title.substringBefore(" (")} 모델이 없습니다. 위 '회의록 요약'에서 내려받아야 통역을 쓸 수 있습니다.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+            )
+        }
         HorizontalDivider()
         Text("회의록 언어", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

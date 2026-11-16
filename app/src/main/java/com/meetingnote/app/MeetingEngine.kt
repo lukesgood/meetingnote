@@ -107,16 +107,27 @@ object MeetingEngine {
 
     fun missingSttModels(spec: ModelSpec = settings.whisper) = listOf(spec, ModelCatalog.VAD).filterNot { models.isReady(it) }
 
+    private val interpreterMissingMessage get() =
+        "실시간 통역에는 ${ModelCatalog.INTERPRETER.title.substringBefore(" (")} 모델이 필요합니다. 설정에서 내려받거나 통역을 꺼 주세요."
+
+    /** 시작 전에 필요한 모델 확인: 없으면 오류 상태로 두고 false */
+    private fun checkModels(sttSpec: ModelSpec): Boolean {
+        val missing = missingSttModels(sttSpec)
+        val msg = when {
+            missing.isNotEmpty() -> "음성인식 모델이 필요합니다: ${missing.joinToString { it.title }}"
+            settings.interpret && !models.isReady(ModelCatalog.INTERPRETER) -> interpreterMissingMessage
+            else -> return true
+        }
+        _state.value = EngineState(Phase.ERROR, message = msg)
+        return false
+    }
+
     // ---------------------------------------------------------------- 녹음
 
     fun startRecording() {
         if (_state.value.busy) return
-        val missing = missingSttModels()
-        if (missing.isNotEmpty()) {
-            _state.value = EngineState(Phase.ERROR, message = "음성인식 모델이 필요합니다: ${missing.joinToString { it.title }}")
-            return
-        }
         val sttSpec = settings.whisper
+        if (!checkModels(sttSpec)) return
         val meeting = repo.create().copy(sttModel = sttSpec.title).also { repo.save(it) }
         _state.value = EngineState(Phase.LOADING, meetingId = meeting.id, message = "음성인식 모델 불러오는 중…")
         startService()
@@ -171,10 +182,10 @@ object MeetingEngine {
         }
     }
 
-    /** 통역 준비: 요약 모델을 불러와 번역기 생성 (추론 스레드에서 호출) */
+    /** 통역 준비: 통역 모델(항상 Qwen3)을 불러와 번역기 생성 (추론 스레드에서 호출) */
     private fun startInterpreter(): Translator {
-        val spec = settings.llm
-        require(models.isReady(spec)) { "통역에 쓸 요약 모델이 없습니다: ${spec.title}" }
+        val spec = ModelCatalog.INTERPRETER
+        require(models.isReady(spec)) { interpreterMissingMessage }
         val prevMessage = _state.value.message
         _state.update { it.copy(message = "통역 모델 불러오는 중…") }
         ErrorReporter.trail("통역 모델 로드: ${spec.id}")
@@ -238,11 +249,7 @@ object MeetingEngine {
     /** @param sttSpec 사용할 음성인식 모델 */
     fun transcribeFile(meetingId: String, thenSummarize: Boolean = true, sttSpec: ModelSpec = settings.whisper) {
         if (_state.value.busy) return
-        val missing = missingSttModels(sttSpec)
-        if (missing.isNotEmpty()) {
-            _state.value = EngineState(Phase.ERROR, message = "음성인식 모델이 필요합니다: ${missing.joinToString { it.title }}")
-            return
-        }
+        if (!checkModels(sttSpec)) return
         _state.value = EngineState(Phase.TRANSCRIBING_FILE, meetingId = meetingId, message = "음성 파일 인식 중…")
         startService()
         scope.launch {

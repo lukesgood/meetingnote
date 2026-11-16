@@ -93,6 +93,10 @@ class MainActivity : ComponentActivity() {
         }
         // 테스트용 설정: --ez interpret true|false, --es minutes_lang ko|en, --ez trim_encoder true|false
         if (intent?.hasExtra("interpret") == true) { MeetingEngine.settings.interpret = intent.getBooleanExtra("interpret", false); intent.removeExtra("interpret") }
+        intent?.getStringExtra("llm")?.let { id ->
+            com.meetingnote.app.ModelCatalog.llms.firstOrNull { it.id == id }?.let { MeetingEngine.settings.llm = it }
+            intent.removeExtra("llm")
+        }
         intent?.getStringExtra("minutes_lang")?.let { MeetingEngine.settings.minutesLang = it; intent.removeExtra("minutes_lang") }
         if (intent?.hasExtra("trim_encoder") == true) { MeetingEngine.settings.trimEncoder = intent.getBooleanExtra("trim_encoder", false); intent.removeExtra("trim_encoder") }
         // 테스트용: 기존 회의의 회의록만 다시 생성 (--es summarize_id <id>)

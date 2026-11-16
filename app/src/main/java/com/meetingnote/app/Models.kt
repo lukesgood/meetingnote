@@ -65,6 +65,8 @@ object ModelCatalog {
     )
 
     val llms = listOf(QWEN3_4B, EXAONE_1B)
+    /** 실시간 통역 모델: 요약 모델 설정과 무관하게 항상 Qwen3 (EXAONE은 영→한 번역이 되지 않음, 2026-11-17 비교) */
+    val INTERPRETER = QWEN3_4B
     val all = listOf(WHISPER, VAD, QWEN3_4B, EXAONE_1B)
 
     /** 이전 버전에서 제공했다가 삭제한 모델 파일 (앱 시작 시 정리) */
