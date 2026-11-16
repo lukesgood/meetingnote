@@ -1,0 +1,9 @@
+ko|김민수: 안녕하세요, 오늘은 미국 파트너사와 신제품 출시 일정을 논의하겠습니다.
+en|Sarah: Thanks for having us. We'd like to confirm the launch date in the US market.
+ko|김민수: 한국 출시는 12월 1일로 확정되었고, 미국은 2주 뒤인 12월 15일을 목표로 하고 있습니다.
+en|Sarah: December fifteenth works for us, but we need the marketing materials by November twentieth.
+ko|박지영: 마케팅 자료는 제가 11월 18일까지 영문으로 준비해서 공유하겠습니다.
+en|Sarah: Great. Also, our legal team needs to review the privacy policy before launch.
+ko|김민수: 개인정보 처리방침 검토는 다음 주 수요일까지 법무팀에 요청하겠습니다.
+en|Sarah: Perfect. Let's have a follow-up call next Tuesday at 9 AM Pacific time.
+ko|김민수: 좋습니다. 그럼 다음 회의는 다음 주 화요일 오전 9시 미국 서부 시간으로 하겠습니다.

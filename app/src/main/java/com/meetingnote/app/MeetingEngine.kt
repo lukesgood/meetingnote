@@ -33,6 +33,10 @@ data class EngineState(
     val summaryText: String = "",
     val summaryStage: String = "",
     val message: String? = null,
+    /** 한↔영 통역 중 */
+    val interpreting: Boolean = false,
+    /** 번역 대기 문장 수 */
+    val translatePending: Int = 0,
 ) {
     val busy get() = phase != Phase.IDLE && phase != Phase.ERROR
 }
@@ -68,6 +72,10 @@ object MeetingEngine {
 
     private var recorder: AudioRecorder? = null
     private var transcriber: StreamingTranscriber? = null
+    private var translator: Translator? = null
+    /** 통역용으로 녹음 중 불러 둔 LLM. 녹음이 끝나면 회의록 작성에 그대로 재사용 */
+    private var sharedLlm: LlamaModel? = null
+    private var sharedLlmSpec: ModelSpec? = null
     private var whisper: WhisperContext? = null
     private var whisperSpec: ModelSpec? = null
 
@@ -116,6 +124,7 @@ object MeetingEngine {
         scope.launch(inference) {
             try {
                 val w = loadWhisper(sttSpec)
+                if (settings.interpret) startInterpreter()
                 recordedSamples = 0; processedMs = 0
                 val t = StreamingTranscriber(
                     scope = CoroutineScope(inference),
@@ -123,6 +132,8 @@ object MeetingEngine {
                     vadPath = models.file(ModelCatalog.VAD).path,
                     threads = settings.threads,
                     vocabulary = settings.vocabulary,
+                    language = if (settings.interpret) "" else "ko",
+                    trimEncoder = settings.trimEncoder,
                     onLines = { lines -> appendLines(lines) },
                     onChunkDone = { audioMs, procMs ->
                         processedMs += audioMs
@@ -160,9 +171,46 @@ object MeetingEngine {
         }
     }
 
+    /** 통역 준비: 요약 모델을 불러와 번역기 생성 (추론 스레드에서 호출) */
+    private fun startInterpreter(): Translator {
+        val spec = settings.llm
+        require(models.isReady(spec)) { "통역에 쓸 요약 모델이 없습니다: ${spec.title}" }
+        val prevMessage = _state.value.message
+        _state.update { it.copy(message = "통역 모델 불러오는 중…") }
+        ErrorReporter.trail("통역 모델 로드: ${spec.id}")
+        val llm = sharedLlm?.takeIf { sharedLlmSpec == spec }
+            ?: LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads).also { sharedLlm = it; sharedLlmSpec = spec }
+        return Translator(llm, spec, CoroutineScope(inference)) { tr -> updateLine(tr) }
+            .also { translator = it; _state.update { s -> s.copy(interpreting = true, message = prevMessage) } }
+    }
+
+    /** 번역 결과를 해당 문장에 반영하고 저장 */
+    private fun updateLine(l: TranscriptLine) {
+        val st = _state.updateAndGet { s ->
+            s.copy(
+                lines = s.lines.map { if (it.startMs == l.startMs && it.text == l.text) l else it },
+                translatePending = translator?.pendingCount ?: 0,
+            )
+        }
+        st.meetingId?.let { runCatching { repo.saveTranscript(it, st.lines) } }
+    }
+
+    /** 남은 번역 마무리 */
+    private suspend fun finishInterpreter() {
+        val t = translator ?: return
+        _state.update { it.copy(phase = Phase.FINISHING_STT, message = "남은 번역 마무리 중…") }
+        t.finish(); translator = null
+        _state.update { it.copy(translatePending = 0) }
+    }
+
+    private fun releaseSharedLlm() {
+        sharedLlm?.close(); sharedLlm = null; sharedLlmSpec = null
+    }
+
     /** 인식 결과 추가 + 즉시 저장 (비정상 종료 시에도 녹취록 보존) */
     private fun appendLines(lines: List<TranscriptLine>) {
-        val st = _state.updateAndGet { it.copy(lines = it.lines + lines) }
+        translator?.submit(lines)
+        val st = _state.updateAndGet { it.copy(lines = it.lines + lines, translatePending = translator?.pendingCount ?: 0) }
         st.meetingId?.let { runCatching { repo.saveTranscript(it, st.lines) } }
     }
 
@@ -176,11 +224,12 @@ object MeetingEngine {
         scope.launch {
             r.stop(); recorder = null
             transcriber?.finish(); transcriber = null
+            finishInterpreter()
             val lines = _state.value.lines
             repo.saveTranscript(id, lines)
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
             releaseWhisper()
-            if (autoSummarize && lines.isNotEmpty()) summarizeInternal(id) else finishIdle()
+            if (autoSummarize && lines.isNotEmpty()) summarizeInternal(id) else { releaseSharedLlm(); finishIdle() }
         }
     }
 
@@ -199,7 +248,7 @@ object MeetingEngine {
         scope.launch {
             try {
                 val w = withContext(inference) {
-                    loadWhisper(sttSpec)
+                    loadWhisper(sttSpec).also { if (settings.interpret) startInterpreter() }
                 }
                 val audio = repo.audioFile(meetingId)
                 val totalMs = wavSampleCount(audio) * 1000L / AudioRecorder.SAMPLE_RATE
@@ -209,6 +258,8 @@ object MeetingEngine {
                     scope = CoroutineScope(inference), whisper = w,
                     vadPath = models.file(ModelCatalog.VAD).path, threads = settings.threads,
                     vocabulary = settings.vocabulary,
+                    language = if (settings.interpret) "" else "ko",
+                    trimEncoder = settings.trimEncoder,
                     onLines = { lines -> appendLines(lines) },
                     onChunkDone = { audioMs, procMs ->
                         processedMs += audioMs
@@ -224,9 +275,10 @@ object MeetingEngine {
                     t.feed(block)
                 }
                 t.finish()
+                finishInterpreter()
                 repo.saveTranscript(meetingId, _state.value.lines)
                 releaseWhisper()
-                if (thenSummarize && _state.value.lines.isNotEmpty()) summarizeInternal(meetingId) else finishIdle()
+                if (thenSummarize && _state.value.lines.isNotEmpty()) summarizeInternal(meetingId) else { releaseSharedLlm(); finishIdle() }
             } catch (e: Throwable) {
                 fail(e)
             }
@@ -282,8 +334,10 @@ object MeetingEngine {
         try {
             val t0 = System.currentTimeMillis()
             ErrorReporter.trail("요약 모델 로드: ${spec.id}, 녹취 ${transcript.size}문장, 스레드 ${settings.threads}")
-            llm = LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads)
-            val s = Summarizer(llm, spec, vocabulary = settings.vocabulary).also { summarizer = it }
+            // 통역용으로 이미 불러 둔 모델이 있으면 재사용 (다시 불러오는 시간 절약)
+            llm = sharedLlm?.takeIf { sharedLlmSpec == spec }?.also { sharedLlm = null; sharedLlmSpec = null }
+                ?: run { releaseSharedLlm(); LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads) }
+            val s = Summarizer(llm, spec, vocabulary = settings.vocabulary, lang = settings.minutesLang).also { summarizer = it }
             val (minutes, stats) = s.summarize(
                 transcript,
                 onProgress = { p ->
@@ -302,7 +356,9 @@ object MeetingEngine {
             if (meeting != null && !meeting.titleEdited) {
                 _state.update { it.copy(summaryStage = "제목 만드는 중…") }
                 runCatching { s.makeTitle(minutes) }.getOrNull()?.let { t ->
-                    val date = java.text.SimpleDateFormat("M월 d일", java.util.Locale.KOREAN).format(java.util.Date(meeting!!.createdAt))
+                    val date = if (settings.minutesLang == "en")
+                        java.text.SimpleDateFormat("MMM d", java.util.Locale.ENGLISH).format(java.util.Date(meeting!!.createdAt))
+                    else java.text.SimpleDateFormat("M월 d일", java.util.Locale.KOREAN).format(java.util.Date(meeting!!.createdAt))
                     meeting = meeting!!.copy(title = "$date · $t")
                 }
             }
@@ -329,6 +385,10 @@ object MeetingEngine {
 
     private fun fail(e: Throwable) {
         Log.e(TAG, "error", e)
+        scope.launch(inference) {
+            runCatching { translator?.finish() }; translator = null
+            releaseSharedLlm()
+        }
         ErrorReporter.recordError(e)
         recorder?.stop(); recorder = null
         _state.update { it.copy(phase = Phase.ERROR, message = e.message ?: e.toString()) }
@@ -362,6 +422,24 @@ class Settings(context: Context) {
     var threads: Int
         get() = prefs.getInt("threads", DeviceInfo.recommendedThreads)
         set(v) = prefs.edit().putInt("threads", v).apply()
+
+    /** 한국어 ↔ 영어 실시간 통역 */
+    var interpret: Boolean
+        get() = prefs.getBoolean("interpret", false)
+        set(v) = prefs.edit().putBoolean("interpret", v).apply()
+    /** 회의록 언어: "ko" / "en" */
+    var minutesLang: String
+        get() = prefs.getString("minutes_lang", "ko") ?: "ko"
+        set(v) = prefs.edit().putString("minutes_lang", v).apply()
+    /** 짧은 조각 인코더 창 축소 (실측: 정확도 동일, 조각당 처리 7.2s → 2.0s) */
+    var trimEncoder: Boolean
+        get() = prefs.getBoolean("trim_encoder", true)
+        set(v) = prefs.edit().putBoolean("trim_encoder", v).apply()
+
+    /** 통역 자막 글자 크기 (sp) */
+    var captionSize: Int
+        get() = prefs.getInt("caption_size", 30)
+        set(v) = prefs.edit().putInt("caption_size", v).apply()
 
     // 오실로스코프 손잡이 (0..10 단계, TIME/DIV는 TimeDiv 인덱스)
     var scopeIntensity: Int

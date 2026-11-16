@@ -16,14 +16,38 @@ class Summarizer(
     private val spec: ModelSpec,
     private val nCtx: Int = 4096,
     vocabulary: String = "",
+    /** 회의록 언어: "ko" 한국어, "en" 영어 (녹취록이 한·영 혼합이어도 이 언어로 작성) */
+    private val lang: String = "ko",
 ) {
+    private val en get() = lang == "en"
     data class Progress(val stage: String, val step: Int, val total: Int)
 
     private val terms = vocabulary.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
     /** 음성인식 오류 교정용 용어 안내 */
-    private val termsNote = if (terms.isEmpty()) "" else
-        "참고 용어(정확한 표기): ${terms.joinToString(", ")}\n" +
-                "녹취록에서 이 용어와 발음이 비슷하게 잘못 인식된 단어는 위 표기로 고쳐 쓰세요.\n"
+    private val termsNote get() = when {
+        terms.isEmpty() -> ""
+        en -> "Reference terms (correct spelling): ${terms.joinToString(", ")}\n" +
+            "If the transcript contains words that sound like these terms but were misrecognized, use the spelling above.\n"
+        else -> "참고 용어(정확한 표기): ${terms.joinToString(", ")}\n" +
+            "녹취록에서 이 용어와 발음이 비슷하게 잘못 인식된 단어는 위 표기로 고쳐 쓰세요.\n"
+    }
+
+    private val minutesFormatEn = """
+        ## Summary
+        (Up to 3 sentences in your own words. Do not copy transcript sentences.)
+
+        ## Key Discussion Points
+        - One bullet per topic
+
+        ## Decisions
+        - Only what participants explicitly agreed on (write 'None' if there are none)
+
+        ## Action Items (Owner / Due)
+        - Owner: task (due) — only tasks someone committed to (write 'None' if there are none)
+
+        ## Next Meeting
+        - Date/time ('Not mentioned' if not discussed)
+    """.trimIndent()
 
     private val minutesFormat = """
         ## 회의 요약
@@ -43,6 +67,20 @@ class Summarizer(
     """.trimIndent()
 
     private fun finalPrompt(body: String, isNotes: Boolean): String {
+        if (en) return buildString {
+            val what = if (isNotes) "section notes of a meeting" else "meeting transcript"
+            append("You are an expert minute-taker. Read the $what below and write meeting minutes in English using the format below.\n")
+            append("The transcript may mix Korean and English; write everything in English.\n")
+            append("Never invent anything not in the transcript; keep numbers, dates and owners exactly as stated.\n")
+            append("The transcript comes from speech recognition, so some words may be wrong — interpret them from context.\n")
+            append("Ignore sentences unrelated to the meeting flow (broadcast phrases, out-of-context lines) as recognition errors.\n")
+            append("Do not turn simple questions, confirmations or remarks into decisions or action items.\n")
+            append("If there is almost no meeting content (mic test, brief chat), say so in one sentence in the Summary and write 'None' for the other sections.\n")
+            append(termsNote)
+            append("\n").append(minutesFormatEn).append("\n\n")
+            append("Here is the $what.\n")
+            append(body)
+        }
         val what = if (isNotes) "회의를 구간별로 정리한 메모" else "회의 녹취록"
         // 들여쓰기 공백이 프롬프트에 섞이지 않도록 줄 단위로 조립 (불필요한 토큰 절약)
         return buildString {
@@ -59,7 +97,13 @@ class Summarizer(
         }
     }
 
-    private fun mapPrompt(part: String, idx: Int, total: Int) = buildString {
+    private fun mapPrompt(part: String, idx: Int, total: Int) = if (en) buildString {
+        append("Below is part ($idx/$total) of a meeting transcript (may mix Korean and English). In English, list only the key discussion points, ")
+        append("decisions, action items (owner/due) and schedule from this part as bullets (-), at most 10 lines. Mention each item once. ")
+        append("Do not invent anything; keep numbers and dates as stated. Ignore out-of-context lines (broadcast phrases) as recognition errors.\n")
+        append(termsNote)
+        append("\n").append(part)
+    } else buildString {
         append("다음은 회의 녹취록의 일부($idx/$total)입니다. 이 부분에서 나온 핵심 논의, 결정 사항, 할 일(담당자/기한), 일정만 ")
         append("글머리표(-)로 최대 10줄 이내로 간결하게 정리하세요. 같은 내용은 한 번만 쓰세요. ")
         append("녹취록에 없는 내용은 만들지 마세요. 숫자와 날짜는 원문 그대로 쓰세요. ")
@@ -115,14 +159,18 @@ class Summarizer(
 
     /** 회의록의 '회의 요약' 부분으로 짧은 제목 생성 (프롬프트를 짧게 유지해 수 초 내 완료) */
     fun makeTitle(minutes: String): String? {
-        val summary = minutes.substringAfter("## 회의 요약", minutes).substringBefore("\n## ").trim().take(400)
+        val header = if (en) "## Summary" else "## 회의 요약"
+        val summary = minutes.substringAfter(header, minutes).substringBefore("\n## ").trim().take(400)
         if (summary.isBlank()) return null
-        val prompt = "다음 회의 요약을 보고 회의 제목을 20자 이내의 한국어 명사구 하나로만 답하세요. " +
+        val prompt = if (en)
+            "Based on this meeting summary, reply with a single short English title (max 8 words). " +
+                "No quotes or explanation, only the title.\n\n$summary"
+        else "다음 회의 요약을 보고 회의 제목을 20자 이내의 한국어 명사구 하나로만 답하세요. " +
                 "따옴표나 설명 없이 제목만 쓰세요.\n\n$summary"
         val t = run(prompt, 32, mutableListOf()) {}
             .lineSequence().firstOrNull { it.isNotBlank() }
-            ?.trim()?.trim('"', '\'', '“', '”', '*', '#', ' ')?.removePrefix("제목:")?.trim()
-        return t?.takeIf { it.length in 2..40 }
+            ?.trim()?.trim('"', '\'', '“', '”', '*', '#', ' ')?.removePrefix("제목:")?.removePrefix("Title:")?.trim()
+        return t?.takeIf { it.length in 2..60 }
     }
 
     private fun run(user: String, maxTokens: Int, stats: MutableList<GenerationStats>, onText: (String) -> Unit): String {

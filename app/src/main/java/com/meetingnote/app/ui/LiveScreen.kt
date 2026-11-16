@@ -96,11 +96,13 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                     }
                     if (s.phase == Phase.RECORDING) {
                         val scope by MeetingEngine.scopeData.collectAsState()
-                        ScopeView(scope, paused, Modifier.fillMaxWidth(), crtHeight = if (wideLayout) 400.dp else 240.dp)
+                        ScopeView(scope, paused, Modifier.fillMaxWidth(),
+                            crtHeight = when { s.interpreting -> 170.dp; wideLayout -> 400.dp; else -> 240.dp })
                     }
                     val rtf = s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중"
                     Text(
-                        "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개",
+                        "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개" +
+                            (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (s.phase == Phase.ERROR) {
@@ -137,21 +139,22 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                         MarkdownText(s.summaryText.ifEmpty { "모델이 녹취록을 읽는 중입니다…" })
                     }
                 }
+            } else if (s.interpreting) {
+                InterpretPane(s.lines, s.translatePending)
             } else {
-                Text("실시간 녹취록", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (s.interpreting) "실시간 녹취 · 통역" else "실시간 녹취록", style = MaterialTheme.typography.titleMedium)
+                    if (s.interpreting) Badge(null, "한국어 ↔ English", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
+                }
                 val listState = rememberLazyListState()
                 LaunchedEffect(s.lines.size) { if (s.lines.isNotEmpty()) listState.animateScrollToItem(s.lines.size - 1) }
                 Card(Modifier.fillMaxWidth().weight(1f)) {
                     LazyColumn(state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                         if (s.lines.isEmpty()) item {
-                            Text("말하기 시작하면 약 30초 단위로 텍스트가 나타납니다.", style = MaterialTheme.typography.bodyMedium)
+                            Text("말하기 시작하면 문장이 끝날 때마다(보통 5~15초) 텍스트가 나타납니다.", style = MaterialTheme.typography.bodyMedium)
                         }
                         items(s.lines) { l ->
-                            Row(Modifier.padding(vertical = 4.dp)) {
-                                Text(formatTime(l.startMs), style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.width(56.dp))
-                                Text(l.text)
-                            }
+                            TranscriptRow(l, showTranslation = s.interpreting)
                             HorizontalDivider()
                         }
                     }
@@ -163,8 +166,9 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
             wideLayout = maxWidth >= 840.dp
             if (wideLayout) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Column(Modifier.weight(1.3f).fillMaxHeight().verticalScroll(rememberScrollState())) { statusCard() }
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) { contentPane() }
+                    // 통역 중에는 자막 영역을 넓게 (상태 1 : 통역 1.8)
+                    Column(Modifier.weight(if (s.interpreting) 1f else 1.3f).fillMaxHeight().verticalScroll(rememberScrollState())) { statusCard() }
+                    Column(Modifier.weight(if (s.interpreting) 1.8f else 1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) { contentPane() }
                 }
             } else {
                 Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {

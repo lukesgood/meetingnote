@@ -70,6 +70,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.Switch
+import androidx.compose.material.icons.filled.Translate
 import com.meetingnote.app.DeviceInfo
 import com.meetingnote.app.ErrorReporter
 import com.meetingnote.app.MeetingEngine
@@ -121,6 +123,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
         }
         val vocabCard: @Composable () -> Unit = { VocabularyCard() }
+        val langCard: @Composable () -> Unit = { LanguageCard(llm) }
         val perfCard: @Composable () -> Unit = { PerformanceCard() }
         val storageCard: @Composable () -> Unit = { StorageCard(tick) }
         val aboutCard: @Composable () -> Unit = { AboutCard(onReport = { reporting = true }) }
@@ -135,7 +138,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 if (wide) {
                     Row(Modifier.widthIn(max = 1400.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            sttCard(); llmCard()
+                            sttCard(); langCard(); llmCard()
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             vocabCard(); perfCard(); storageCard(); aboutCard()
@@ -143,7 +146,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 } else {
                     Column(Modifier.widthIn(max = 720.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        sttCard(); llmCard(); vocabCard(); perfCard(); storageCard(); aboutCard()
+                        sttCard(); langCard(); llmCard(); vocabCard(); perfCard(); storageCard(); aboutCard()
                     }
                 }
                 Spacer(Modifier.height(24.dp))
@@ -244,6 +247,40 @@ private fun ModelOption(
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(start = 48.dp))
         }
+    }
+}
+
+/** 통역(한국어 ↔ 영어)과 회의록 언어 */
+@Composable
+private fun LanguageCard(llm: ModelSpec) {
+    val settings = MeetingEngine.settings
+    var interpret by remember { mutableStateOf(settings.interpret) }
+    var lang by remember { mutableStateOf(settings.minutesLang) }
+    SectionCard(Icons.Default.Translate, "통역 · 회의록 언어", "한국어와 영어가 섞인 회의를 실시간으로 통역합니다.") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("실시간 통역 (한국어 ↔ 영어)", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Text("말한 언어를 자동으로 알아내 반대 언어로 번역해 녹취록에 함께 표시합니다.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(interpret, { interpret = it; settings.interpret = it })
+        }
+        if (interpret) Hint(
+            "번역은 '회의록 요약' 모델(${llm.title.substringBefore(" (")})로 기기 안에서 합니다. 녹음 중에도 모델이 메모리에 올라가 " +
+                "배터리 사용이 늘고, 문장이 끝난 뒤 번역이 뜨기까지 몇 초 더 걸립니다." +
+                if (llm == ModelCatalog.EXAONE_1B) "" else " 실시간 통역에는 더 빠른 EXAONE을 권장합니다."
+        )
+        HorizontalDivider()
+        Text("회의록 언어", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("ko" to "한국어", "en" to "English").forEach { (code, label) ->
+                androidx.compose.material3.FilterChip(
+                    selected = lang == code, onClick = { lang = code; settings.minutesLang = code },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Hint("녹취록이 한·영 혼합이어도 선택한 언어로 회의록과 제목을 작성합니다.")
     }
 }
 

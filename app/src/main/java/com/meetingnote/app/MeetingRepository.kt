@@ -8,7 +8,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class TranscriptLine(val startMs: Long, val endMs: Long, val text: String)
+/**
+ * 녹취록 한 문장.
+ * @param lang 인식 언어 ("ko"/"en", 모르면 null)
+ * @param translation 통역 결과 (통역 모드에서만, 번역 전이면 null)
+ */
+data class TranscriptLine(
+    val startMs: Long, val endMs: Long, val text: String,
+    val lang: String? = null, val translation: String? = null,
+)
 
 data class Meeting(
     val id: String,
@@ -85,7 +93,12 @@ class MeetingRepository(context: Context) {
 
     fun saveTranscript(id: String, lines: List<TranscriptLine>) {
         val arr = JSONArray()
-        lines.forEach { arr.put(JSONObject().put("s", it.startMs).put("e", it.endMs).put("t", it.text)) }
+        lines.forEach {
+            val o = JSONObject().put("s", it.startMs).put("e", it.endMs).put("t", it.text)
+            it.lang?.let { l -> o.put("l", l) }
+            it.translation?.let { tr -> o.put("tr", tr) }
+            arr.put(o)
+        }
         transcriptFile(id).writeText(arr.toString())
     }
 
@@ -95,7 +108,11 @@ class MeetingRepository(context: Context) {
         val arr = JSONArray(f.readText())
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
-            TranscriptLine(o.getLong("s"), o.getLong("e"), o.getString("t"))
+            TranscriptLine(
+                o.getLong("s"), o.getLong("e"), o.getString("t"),
+                lang = o.optString("l").takeIf { it.isNotEmpty() },
+                translation = o.optString("tr").takeIf { it.isNotEmpty() },
+            )
         }
     }
 

@@ -95,7 +95,7 @@ fun Badge(icon: ImageVector?, label: String, bg: Color, fg: Color) {
 /** 회의록의 '회의 요약' 단락을 한 줄 미리보기로 (마크다운 기호 제거) */
 fun summaryPreview(md: String): String {
     val lines = md.lines()
-    val start = lines.indexOfFirst { it.trimStart().startsWith("#") && it.contains("요약") }
+    val start = lines.indexOfFirst { it.trimStart().startsWith("#") && (it.contains("요약") || it.contains("Summary")) }
     val body = if (start >= 0) lines.drop(start + 1).takeWhile { !it.trimStart().startsWith("#") }
                else lines.filterNot { it.trimStart().startsWith("#") }
     return body.joinToString(" ") { it.trim().removePrefix("- ").removePrefix("* ") }

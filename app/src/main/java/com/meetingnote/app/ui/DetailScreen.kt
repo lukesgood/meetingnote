@@ -79,6 +79,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
     val meeting = remember(id, engine.phase, version) { repo.get(id) }
     val minutes = remember(id, engine.phase, version) { repo.loadMinutes(id) }
     val transcript = remember(id, engine.phase) { repo.loadTranscript(id) }
+    val hasTranslation = transcript.any { it.translation != null || it.lang != null }
     var tab by remember { mutableIntStateOf(if (minutes != null) 0 else 1) }
     var confirmDelete by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -98,7 +99,10 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                         appendLine("# ${meeting.title}"); appendLine()
                         appendLine(minutes ?: "")
                         appendLine(); appendLine("---"); appendLine("## 녹취록")
-                        transcript.forEach { appendLine("[${formatTime(it.startMs)}] ${it.text}") }
+                        transcript.forEach {
+                            appendLine("[${formatTime(it.startMs)}] ${it.text}")
+                            it.translation?.let { tr -> appendLine("    → $tr") }
+                        }
                     }
                     ctx.startActivity(Intent.createChooser(
                         Intent(Intent.ACTION_SEND).setType("text/plain")
@@ -168,11 +172,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                     SelectionContainer {
                         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                             items(transcript) { l ->
-                                Row(Modifier.padding(vertical = 4.dp)) {
-                                    Text(formatTime(l.startMs), style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary, modifier = Modifier.width(56.dp))
-                                    Text(l.text)
-                                }
+                                TranscriptRow(l, showTranslation = hasTranslation)
                                 HorizontalDivider()
                             }
                         }

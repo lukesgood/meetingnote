@@ -24,19 +24,39 @@ class StreamingTranscriber(
     private val vadPath: String?,
     private val threads: Int,
     vocabulary: String = "",
+    /** 인식 언어: "ko" 고정, 빈 문자열이면 한국어/영어 자동 감지 (통역 모드) */
+    private val language: String = "ko",
+    /** 짧은 조각의 인코더 창을 실제 길이에 맞게 줄임 (속도 향상, 정확도는 실측으로 판단) */
+    private val trimEncoder: Boolean = false,
     private val onLines: (List<TranscriptLine>) -> Unit,
     private val onChunkDone: (audioMs: Long, procMs: Long) -> Unit,
 ) {
     private val sr = AudioRecorder.SAMPLE_RATE
-    private val minChunk = 25 * sr
-    private val maxChunk = 30 * sr
+    /**
+     * 발화 단위 분할: 말소리가 나온 뒤 0.5초 이상 쉬면 그 쉼의 가운데에서 자른다.
+     * 최소 4초(너무 짧으면 문맥 부족), 최대 15초(그 안에서 가장 조용한 곳). 기존 25~30초 고정 분할 대비 지연 단축.
+     */
+    private val minChunk = 4 * sr
+    private val maxChunk = 15 * sr
+    private val pauseFrames = 5
     private val frame = sr / 10 // 100ms 에너지 분석 단위
+
+    // 실시간 분할 판단용 상태
+    private var frameAcc = 0              // 현재 100ms 프레임에 모은 샘플 수
+    private var frameEnergy = 0.0
+    private var quietRun = 0              // 버퍼 끝에서 연속된 조용한 프레임 수
+    private var hasSpeech = false         // 현재 버퍼에 말소리가 있었는지
+    /** 최근 30초 프레임 RMS. 배경 소음은 조각 안이 아니라 이 긴 구간의 하위 10%로 추정
+     *  (짧은 조각이 말소리로만 채워지면 조각 안 기준으로는 말소리를 소음으로 오인해 통째로 버리는 문제) */
+    private val recentRms = ArrayDeque<Double>()
+    @Volatile private var noiseFloor = 0.0
 
     private val buffer = ShortArray(maxChunk + sr)
     private var len = 0
     private var bufferStartSample = 0L
-    private val queue = Channel<Pair<Long, FloatArray>>(Channel.UNLIMITED)
+    private val queue = Channel<Triple<Long, FloatArray, Double>>(Channel.UNLIMITED)
     private var lastText = ""
+    private var lastLang: String? = null
     /** 최근 채택한 문장 (정규화). 같은 문장이 반복되면 버림 */
     private val recent = ArrayDeque<String>()
     /** 용어 사전은 Whisper의 initial prompt로 넣어 표기를 유도 (토큰 한도 고려해 길이 제한) */
@@ -46,8 +66,9 @@ class StreamingTranscriber(
     /** 대기 중인 조각 수 (파일 인식 시 메모리 사용 제한용) */
     val pendingChunks get() = pending.get()
     private val worker: Job = scope.launch {
-        for ((offset, pcm) in queue) {
-            try { process(offset, pcm) } finally { pending.decrementAndGet() }
+        for ((offset, pcm, floor) in queue) {
+            try { process(offset, pcm, floor) } finally { pending.decrementAndGet() }
+            kotlinx.coroutines.yield()   // 같은 추론 스레드의 번역 작업이 끼어들 수 있게
         }
     }
 
@@ -55,10 +76,29 @@ class StreamingTranscriber(
     fun feed(samples: ShortArray) {
         System.arraycopy(samples, 0, buffer, len, samples.size)
         len += samples.size
-        if (len >= maxChunk) {
-            val cut = findCut()
-            emit(cut)
+        // 100ms 프레임 단위로 말소리/쉼 판단
+        for (v in samples) {
+            frameEnergy += v.toDouble() * v; frameAcc++
+            if (frameAcc == frame) {
+                onFrame(sqrt(frameEnergy / frame) / 32768.0)
+                frameAcc = 0; frameEnergy = 0.0
+            }
         }
+        when {
+            // 말소리 뒤 0.5초 쉼 → 쉼의 가운데에서 자름
+            len >= minChunk && hasSpeech && quietRun >= pauseFrames -> emit(len - quietRun * frame / 2)
+            len >= maxChunk -> emit(findCut())
+        }
+    }
+
+    private fun onFrame(rms: Double) {
+        recentRms.addLast(rms); while (recentRms.size > 300) recentRms.removeFirst()
+        val floor = recentRms.sorted()[recentRms.size / 10]
+        noiseFloor = floor
+        val speech = rms >= 0.004 && rms >= floor * 4
+        val quiet = rms < maxOf(0.003, floor * 2.5)
+        if (speech) hasSpeech = true
+        quietRun = if (quiet) quietRun + 1 else 0
     }
 
     /** 녹음 종료: 남은 버퍼를 처리하고 모든 작업이 끝날 때까지 대기 */
@@ -71,7 +111,7 @@ class StreamingTranscriber(
     private fun findCut(): Int {
         var bestIdx = maxChunk
         var bestEnergy = Double.MAX_VALUE
-        var i = minChunk
+        var i = maxChunk * 2 / 3
         while (i + frame <= maxChunk) {
             var e = 0.0
             for (j in i until i + frame) {
@@ -86,16 +126,18 @@ class StreamingTranscriber(
     }
 
     private fun emit(n: Int) {
+        // 잘린 뒤 남은 꼬리(쉼 절반)는 다음 조각의 시작이므로 말소리 상태 초기화
+        hasSpeech = false; quietRun = 0
         val pcm = FloatArray(n) { buffer[it] / 32768f }
         val offset = bufferStartSample
         System.arraycopy(buffer, n, buffer, 0, len - n)
         len -= n
         bufferStartSample += n
         pending.incrementAndGet()
-        queue.trySend(offset to pcm)
+        queue.trySend(Triple(offset, pcm, if (recentRms.size >= 20) noiseFloor else -1.0))
     }
 
-    private fun process(offsetSamples: Long, pcm: FloatArray) {
+    private fun process(offsetSamples: Long, pcm: FloatArray, historyFloor: Double) {
         // 100ms 구간별 RMS
         val frames = ArrayList<Double>(pcm.size / frame + 1)
         var i = 0
@@ -108,7 +150,9 @@ class StreamingTranscriber(
         }
         val sorted = frames.sorted()
         val peakRms = sorted.lastOrNull() ?: 0.0
-        val noiseFloor = sorted.getOrElse(sorted.size / 5) { 0.0 }          // 하위 20% = 배경 소음
+        // 배경 소음: 최근 30초 기록이 있으면 그것(조각보다 긴 구간), 없으면 조각 안 하위 20%
+        val chunkFloor = sorted.getOrElse(sorted.size / 5) { 0.0 }
+        val noiseFloor = if (historyFloor >= 0) minOf(historyFloor, chunkFloor) else chunkFloor
         // 말소리 구간: -48dBFS 이상이면서 배경 소음보다 12dB 이상 큰 100ms 구간
         val speechFrames = frames.count { it >= 0.004 && it >= noiseFloor * 4 }
         val audioMs = pcm.size * 1000L / sr
@@ -124,15 +168,22 @@ class StreamingTranscriber(
         val gain = minOf(0.1 / peakRms, 10.0, noiseCap).coerceAtLeast(1.0).toFloat()
         if (gain > 1.05f) for (k in pcm.indices) pcm[k] = (pcm[k] * gain).coerceIn(-1f, 1f)
         val t0 = System.currentTimeMillis()
-        val segs = try {
+        val segsResult = try {
             whisper.transcribe(
-                pcm, threads = threads, language = "ko", beamSize = 5,
+                pcm, threads = threads, language = language, beamSize = 5,
                 initialPrompt = (vocabPrompt + lastText.takeLast(100)).ifBlank { null },
                 vadModelPath = vadPath,
+                // 인코더 창: 50프레임/초 + 여유, 64 배수 (30초 = 1500)
+                audioCtx = if (trimEncoder) ((pcm.size * 50L / sr + 64 + 63) / 64 * 64).toInt().coerceAtMost(1500) else 0,
+                koEnOnly = language.isEmpty(),
             )
         } catch (e: Exception) {
-            Log.e("Transcriber", "transcribe failed", e); emptyList()
+            Log.e("Transcriber", "transcribe failed", e); null
         }
+        val segLang = segsResult?.language?.takeIf { it == "ko" || it == "en" }
+        // 언어가 바뀌면 이전 문맥(다른 언어)을 프롬프트로 넘기지 않음
+        if (segLang != null && segLang != lastLang) { lastText = ""; lastLang = segLang }
+        val segs = segsResult?.segments.orEmpty()
         val procMs = System.currentTimeMillis() - t0
         val offsetMs = offsetSamples * 1000 / sr
         val lines = ArrayList<TranscriptLine>()
@@ -145,7 +196,7 @@ class StreamingTranscriber(
                 // 최근 5문장과 같은 문장: 앞 조각의 문장을 프롬프트로 이어받아 베끼는 반복 (환각 연쇄)
                 key.length >= 2 && key in recent -> dropped++
                 else -> {
-                    lines += TranscriptLine(offsetMs + seg.startMs, offsetMs + seg.endMs, text)
+                    lines += TranscriptLine(offsetMs + seg.startMs, offsetMs + seg.endMs, text, lang = segLang)
                     if (key.length >= 2) { recent.addLast(key); while (recent.size > 5) recent.removeFirst() }
                 }
             }

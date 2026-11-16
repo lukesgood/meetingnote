@@ -52,7 +52,8 @@ Java_com_meetingnote_whisper_WhisperLib_nativeFree(JNIEnv *, jobject, jlong hand
 JNIEXPORT jbyteArray JNICALL
 Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
         JNIEnv * env, jobject, jlong handle, jfloatArray pcm, jint threads,
-        jstring lang, jint beamSize, jstring initialPrompt, jstring vadModelPath) {
+        jstring lang, jint beamSize, jstring initialPrompt, jstring vadModelPath, jint audioCtx,
+        jboolean koEnOnly) {
     auto * ctx = reinterpret_cast<whisper_context *>(handle);
     if (!ctx) return nullptr;
 
@@ -85,13 +86,29 @@ Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
         p.vad = true;
         p.vad_model_path = vadPath.c_str();
     }
+    // 짧은 조각은 인코더 창을 실제 길이에 맞게 줄여 연산 절감 (0 = 기본 30초 창)
+    if (audioCtx > 0) p.audio_ctx = audioCtx;
 
     if (whisper_full(ctx, p, samples.data(), (int) samples.size()) != 0) {
         LOGE("whisper_full failed");
         return nullptr;
     }
+    // 언어 자동 감지 시 한국어/영어 외 언어로 잘못 감지되면 한국어로 다시 인식 (한↔영 통역 모드)
+    if (language.empty() && koEnOnly) {
+        const char * detected = whisper_lang_str(whisper_full_lang_id(ctx));
+        if (detected && std::string(detected) != "ko" && std::string(detected) != "en") {
+            p.language = "ko";
+            p.detect_language = false;
+            if (whisper_full(ctx, p, samples.data(), (int) samples.size()) != 0) return nullptr;
+        }
+    }
 
-    std::string out;
+    std::string out = "#lang\t";
+    {
+        const char * l = whisper_lang_str(whisper_full_lang_id(ctx));
+        out += l ? l : "";
+        out += '\n';
+    }
     const int ns = whisper_full_n_segments(ctx);
     for (int i = 0; i < ns; ++i) {
         // t0/t1 단위: 10ms
