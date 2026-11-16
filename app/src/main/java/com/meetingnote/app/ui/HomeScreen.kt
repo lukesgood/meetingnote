@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -62,6 +64,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.window.DialogProperties
 import com.meetingnote.app.Meeting
+import com.meetingnote.app.ErrorReporter
+import androidx.compose.material3.Button
 import com.meetingnote.app.MeetingEngine
 import com.meetingnote.app.ModelCatalog
 import com.meetingnote.app.ModelSpec
@@ -88,6 +92,9 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
     }
     var meetings by remember { mutableStateOf(emptyList<Meeting>()) }
     var showSettings by remember { mutableStateOf(false) }
+    // 오류 보고: 지난 실행의 비정상 종료 / 처리 오류 / 직접 보고
+    var pendingCrash by remember { mutableStateOf(ErrorReporter.pendingCrash()) }
+    var report by remember { mutableStateOf<ReportRequest?>(null) }
     var tick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(state.phase, tick) { meetings = MeetingEngine.repo.list() }
@@ -118,13 +125,16 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
             )
         },
     ) { pad ->
-        LazyColumn(
+        // 반응형: 화면 너비에 따라 회의 카드를 여러 열로 배치 (휴대폰 1열, 태블릿 가로 3~4열)
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 340.dp),
             Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             // 마지막 항목이 '회의 녹음 시작' 버튼에 가리지 않도록 하단 여백
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 96.dp),
         ) {
-            if (state.busy) item {
+            if (state.busy) item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(
                     Modifier.fillMaxWidth().clickable(onClick = onOpenLive),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -141,15 +151,33 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                     }
                 }
             }
-            if (state.phase == Phase.ERROR) item {
+            pendingCrash?.let { c ->
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("지난 실행에서 앱이 비정상 종료됐습니다", fontWeight = FontWeight.SemiBold)
+                                Text("${c.kind}. 오류 보고를 보내 주시면 개선에 도움이 됩니다.",
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = { ErrorReporter.markCrashSeen(); pendingCrash = null }) { Text("닫기") }
+                            Button(onClick = {
+                                report = ReportRequest(crash = c); ErrorReporter.markCrashSeen(); pendingCrash = null
+                            }) { Text("보고하기") }
+                        }
+                    }
+                }
+            }
+            if (state.phase == Phase.ERROR) item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(state.message ?: "오류", Modifier.weight(1f))
+                        TextButton(onClick = { report = ReportRequest(engineError = state.message ?: "오류") }) { Text("오류 보고") }
                         TextButton(onClick = { MeetingEngine.clearError() }) { Text("닫기") }
                     }
                 }
             }
-            if (requiredMissing.isNotEmpty()) item {
+            if (requiredMissing.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("처음 사용하려면 모델이 필요합니다", fontWeight = FontWeight.SemiBold)
@@ -161,10 +189,10 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                     }
                 }
             }
-            item {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("회의 기록", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             }
-            if (meetings.isEmpty()) item {
+            if (meetings.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("아직 기록이 없습니다. 아래 버튼으로 회의 녹음을 시작하세요.",
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 24.dp))
             }
@@ -190,11 +218,14 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                     }
                 }
             }
-            item { Spacer(Modifier.size(96.dp)) }
         }
     }
 
-    if (showSettings) SettingsDialog(onDismiss = { showSettings = false })
+    if (showSettings) SettingsDialog(
+        onDismiss = { showSettings = false },
+        onReport = { showSettings = false; report = ReportRequest() },
+    )
+    report?.let { r -> ErrorReportDialog(r.crash, r.engineError, onDismiss = { report = null }) }
 }
 
 @Composable
@@ -220,7 +251,7 @@ fun ModelRow(spec: ModelSpec, tick: Int) {
 }
 
 @Composable
-fun SettingsDialog(onDismiss: () -> Unit) {
+fun SettingsDialog(onDismiss: () -> Unit, onReport: () -> Unit = {}) {
     val settings = MeetingEngine.settings
     var llm by remember { mutableStateOf(settings.llm) }
     var threads by remember { mutableIntStateOf(settings.threads) }
@@ -272,9 +303,13 @@ fun SettingsDialog(onDismiss: () -> Unit) {
                 Slider(threads.toFloat(), { threads = it.toInt() }, valueRange = 2f..8f, steps = 5)
                 Text("이 기기(Snapdragon 870)는 고성능 코어 4개를 쓰는 4스레드가 가장 빠릅니다.",
                     style = MaterialTheme.typography.bodySmall)
+                Text("문제 보고", fontWeight = FontWeight.SemiBold)
+                OutlinedButton(onClick = onReport) { Text("오류 보고 보내기 (GitHub)") }
             }
         },
     )
 }
+
+data class ReportRequest(val crash: ErrorReporter.Crash? = null, val engineError: String? = null)
 
 fun formatDate(ms: Long): String = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.KOREAN).format(Date(ms))

@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 class MeetingApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        ErrorReporter.install(this)
         MeetingEngine.init(this)
         // IMPORTANCE_LOW 채널은 '무음' 영역에 접혀 종료 버튼이 안 보이므로 DEFAULT + 소리/진동 없음으로 생성.
         // 채널 중요도는 생성 후 바꿀 수 없어 새 ID를 쓰고 예전 채널은 삭제한다.

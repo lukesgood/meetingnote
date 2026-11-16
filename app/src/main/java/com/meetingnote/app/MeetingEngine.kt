@@ -3,6 +3,8 @@ package com.meetingnote.app
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.core.content.ContextCompat
 import com.meetingnote.llama.LlamaModel
 import com.meetingnote.whisper.WhisperContext
@@ -50,6 +52,11 @@ object MeetingEngine {
     lateinit var settings: Settings; private set
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** 녹음 화면 오실로스코프 데이터 (녹음 중에만 갱신) */
+    private val _scope = MutableStateFlow<ScopeData?>(null)
+    val scopeData: StateFlow<ScopeData?> = _scope
+    private var scopeAnalyzer = ScopeAnalyzer()
     /** 추론 전용 스레드 (빅코어 4개를 ggml 스레드풀이 사용) */
     private val inference = Dispatchers.Default.limitedParallelism(1)
 
@@ -70,6 +77,10 @@ object MeetingEngine {
         settings = Settings(app)
         // 앱이 녹음 중 비정상 종료된 경우: WAV 헤더 복구 + 부분 녹취록 유지
         if (!_state.value.busy) repo.recoverUnfinished()
+        // 오류 보고용 동작 기록 (단계 변화만, 내용은 남기지 않음)
+        scope.launch {
+            state.map { it.phase }.distinctUntilChanged().collect { ErrorReporter.trail("단계: $it") }
+        }
     }
 
     fun missingSttModels() = listOf(ModelCatalog.WHISPER, ModelCatalog.VAD).filterNot { models.isReady(it) }
@@ -89,7 +100,7 @@ object MeetingEngine {
 
         scope.launch(inference) {
             try {
-                val w = whisper ?: WhisperContext.load(models.file(ModelCatalog.WHISPER).path).also { whisper = it }
+                val w = whisper ?: run { ErrorReporter.trail("Whisper 로드 (스레드 ${settings.threads})"); WhisperContext.load(models.file(ModelCatalog.WHISPER).path) }.also { whisper = it }
                 recordedSamples = 0; processedMs = 0
                 val t = StreamingTranscriber(
                     scope = CoroutineScope(inference),
@@ -109,11 +120,13 @@ object MeetingEngine {
                     },
                 )
                 transcriber = t
+                scopeAnalyzer = ScopeAnalyzer(); _scope.value = null
                 val r = AudioRecorder(
                     repo.audioFile(meeting.id),
                     onFrames = { f ->
                         recordedSamples += f.size
                         t.feed(f)
+                        _scope.value = scopeAnalyzer.push(f)
                     },
                     onLevel = { lv ->
                         val elapsed = recordedSamples * 1000 / AudioRecorder.SAMPLE_RATE
@@ -165,7 +178,7 @@ object MeetingEngine {
         scope.launch {
             try {
                 val w = withContext(inference) {
-                    whisper ?: WhisperContext.load(models.file(ModelCatalog.WHISPER).path).also { whisper = it }
+                    whisper ?: run { ErrorReporter.trail("Whisper 로드 (스레드 ${settings.threads})"); WhisperContext.load(models.file(ModelCatalog.WHISPER).path) }.also { whisper = it }
                 }
                 val audio = repo.audioFile(meetingId)
                 val totalMs = wavSampleCount(audio) * 1000L / AudioRecorder.SAMPLE_RATE
@@ -247,11 +260,13 @@ object MeetingEngine {
         var llm: LlamaModel? = null
         try {
             val t0 = System.currentTimeMillis()
+            ErrorReporter.trail("요약 모델 로드: ${spec.id}, 녹취 ${transcript.size}문장, 스레드 ${settings.threads}")
             llm = LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads)
             val s = Summarizer(llm, spec, vocabulary = settings.vocabulary).also { summarizer = it }
             val (minutes, stats) = s.summarize(
                 transcript,
                 onProgress = { p ->
+                    ErrorReporter.trail("요약: ${p.stage} ${p.step}/${p.total}")
                     _state.update { it.copy(summaryStage = if (p.total > 1) "${p.stage} (${p.step}/${p.total})" else p.stage) }
                 },
                 onText = { txt -> _state.update { it.copy(summaryText = txt) } },
@@ -293,6 +308,7 @@ object MeetingEngine {
 
     private fun fail(e: Throwable) {
         Log.e(TAG, "error", e)
+        ErrorReporter.recordError(e)
         recorder?.stop(); recorder = null
         _state.update { it.copy(phase = Phase.ERROR, message = e.message ?: e.toString()) }
     }

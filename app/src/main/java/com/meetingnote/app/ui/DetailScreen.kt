@@ -3,6 +3,8 @@ package com.meetingnote.app.ui
 import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -119,12 +121,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                     onClick = { MeetingEngine.transcribeFile(id); onOpenLive() },
                 ) { Icon(Icons.Default.Refresh, null); Text(" 다시 인식") }
             }
-            TabRow(selectedTabIndex = tab) {
-                Tab(tab == 0, { tab = 0 }, text = { Text("회의록") })
-                Tab(tab == 1, { tab = 1 }, text = { Text("녹취록 (${transcript.size})") })
-            }
-            Card(Modifier.fillMaxWidth().weight(1f).padding(bottom = 16.dp)) {
-                if (tab == 0) {
+            val minutesPane: @Composable () -> Unit = {
                     Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
                         if (minutes != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             if (editing) {
@@ -144,7 +141,8 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                             SelectionContainer { MarkdownText(minutes ?: "아직 회의록이 없습니다. '회의록 만들기'를 누르세요.") }
                         }
                     }
-                } else {
+            }
+            val transcriptPane: @Composable () -> Unit = {
                     SelectionContainer {
                         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                             items(transcript) { l ->
@@ -156,6 +154,28 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                                 HorizontalDivider()
                             }
                         }
+                    }
+            }
+            // 반응형: 넓은 화면은 회의록·녹취록을 나란히, 좁은 화면은 탭으로 전환
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(bottom = 16.dp)) {
+                if (maxWidth >= 900.dp) {
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(Modifier.weight(1.4f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("회의록", style = MaterialTheme.typography.titleMedium)
+                            Card(Modifier.fillMaxSize()) { minutesPane() }
+                        }
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("녹취록 (${transcript.size})", style = MaterialTheme.typography.titleMedium)
+                            Card(Modifier.fillMaxSize()) { transcriptPane() }
+                        }
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TabRow(selectedTabIndex = tab) {
+                            Tab(tab == 0, { tab = 0 }, text = { Text("회의록") })
+                            Tab(tab == 1, { tab = 1 }, text = { Text("녹취록 (${transcript.size})") })
+                        }
+                        Card(Modifier.fillMaxSize()) { if (tab == 0) minutesPane() else transcriptPane() }
                     }
                 }
             }

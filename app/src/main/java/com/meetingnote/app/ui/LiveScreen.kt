@@ -1,6 +1,9 @@
 package com.meetingnote.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,7 +31,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -78,31 +80,35 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로") } },
         )
     }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-
-            // 상태 카드
+        // 상태(타이머·오실로스코프·버튼)
+        var wideLayout = false
+        val statusCard: @Composable () -> Unit = {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(formatTime(s.elapsedMs), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(16.dp))
-                        if (s.phase == Phase.RECORDING) {
-                            LinearProgressIndicator(
-                                progress = { (s.level * 8f).coerceIn(0f, 1f) },
-                                Modifier.weight(1f).height(8.dp),
-                            )
-                        } else if (s.busy) {
+                        if (s.busy && s.phase != Phase.RECORDING) {
                             CircularProgressIndicator(Modifier.size(28.dp))
                             Spacer(Modifier.width(12.dp))
                             Text(s.message ?: s.summaryStage, Modifier.weight(1f))
                         }
+                    }
+                    if (s.phase == Phase.RECORDING) {
+                        val scope by MeetingEngine.scopeData.collectAsState()
+                        ScopeView(scope, paused, Modifier.fillMaxWidth(), crtHeight = if (wideLayout) 400.dp else 240.dp)
                     }
                     val rtf = s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중"
                     Text(
                         "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    if (s.phase == Phase.ERROR) Text(s.message ?: "", color = MaterialTheme.colorScheme.error)
+                    if (s.phase == Phase.ERROR) {
+                        Text(s.message ?: "", color = MaterialTheme.colorScheme.error)
+                        var reporting by remember { mutableStateOf(false) }
+                        OutlinedButton(onClick = { reporting = true }) { Text("오류 보고") }
+                        if (reporting) ErrorReportDialog(engineError = s.message ?: "오류", onDismiss = { reporting = false })
+                    }
 
                     if (s.phase == Phase.RECORDING) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(onClick = { paused = !paused; MeetingEngine.setPaused(paused) }) {
@@ -119,7 +125,9 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                     if (s.phase == Phase.SUMMARIZING) OutlinedButton(onClick = { MeetingEngine.cancel() }) { Text("요약 중단") }
                 }
             }
-
+        }
+        // 녹취록 또는 생성 중인 회의록
+        val contentPane: @Composable ColumnScope.() -> Unit = {
             if (s.phase == Phase.SUMMARIZING) {
                 Text("회의록 (생성 중)", style = MaterialTheme.typography.titleMedium)
                 Card(Modifier.fillMaxWidth().weight(1f)) {
@@ -147,6 +155,21 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                             HorizontalDivider()
                         }
                     }
+                }
+            }
+        }
+        // 반응형: 가로로 넓으면(태블릿 가로) 좌우 2단, 좁으면(휴대폰·세로) 위아래
+        BoxWithConstraints(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
+            wideLayout = maxWidth >= 840.dp
+            if (wideLayout) {
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(Modifier.weight(1.3f).fillMaxHeight().verticalScroll(rememberScrollState())) { statusCard() }
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) { contentPane() }
+                }
+            } else {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    statusCard()
+                    contentPane()
                 }
             }
         }
