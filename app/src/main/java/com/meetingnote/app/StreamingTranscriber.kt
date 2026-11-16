@@ -37,6 +37,8 @@ class StreamingTranscriber(
     private var bufferStartSample = 0L
     private val queue = Channel<Pair<Long, FloatArray>>(Channel.UNLIMITED)
     private var lastText = ""
+    /** 최근 채택한 문장 (정규화). 같은 문장이 반복되면 버림 */
+    private val recent = ArrayDeque<String>()
     /** 용어 사전은 Whisper의 initial prompt로 넣어 표기를 유도 (토큰 한도 고려해 길이 제한) */
     private val vocabPrompt = vocabulary.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
         .joinToString(", ").take(150).let { if (it.isEmpty()) "" else "$it. " }
@@ -133,13 +135,25 @@ class StreamingTranscriber(
         }
         val procMs = System.currentTimeMillis() - t0
         val offsetMs = offsetSamples * 1000 / sr
-        val lines = segs.filterNot { Hallucination.isLikely(it.text) }
-            .map { TranscriptLine(offsetMs + it.startMs, offsetMs + it.endMs, it.text) }
-        if (lines.size < segs.size) Log.i("Transcriber", "dropped ${segs.size - lines.size} hallucinated segment(s)")
-        if (lines.isNotEmpty()) {
-            lastText = lines.joinToString(" ") { it.text }
-            onLines(lines)
+        val lines = ArrayList<TranscriptLine>()
+        var dropped = 0
+        for (seg in segs) {
+            val text = Repetition.collapse(seg.text)
+            val key = Repetition.normalize(text)
+            when {
+                Hallucination.isLikely(text) -> dropped++
+                // 최근 5문장과 같은 문장: 앞 조각의 문장을 프롬프트로 이어받아 베끼는 반복 (환각 연쇄)
+                key.length >= 2 && key in recent -> dropped++
+                else -> {
+                    lines += TranscriptLine(offsetMs + seg.startMs, offsetMs + seg.endMs, text)
+                    if (key.length >= 2) { recent.addLast(key); while (recent.size > 5) recent.removeFirst() }
+                }
+            }
         }
+        if (dropped > 0) Log.i("Transcriber", "dropped $dropped hallucinated/repeated segment(s)")
+        // 다음 조각의 문맥(initial prompt)은 검증된 문장만 사용. 이번 조각이 전부 버려졌으면 문맥 초기화
+        lastText = if (lines.isNotEmpty()) lines.joinToString(" ") { it.text } else ""
+        if (lines.isNotEmpty()) onLines(lines)
         Log.i("Transcriber", "chunk ${audioMs}ms -> ${procMs}ms (RTF %.2f)".format(procMs.toDouble() / audioMs))
         onChunkDone(audioMs, procMs)
     }
@@ -164,11 +178,30 @@ object Hallucination {
         "자막 (제공|제작)|한글자막|자막 by",
         "^[(\\[].*[)\\]]$",                       // 문장 전체가 괄호: (박수), [음악], (두 번째 요리는)
         "^(음악|박수|웃음)$",
+        "오늘의 주인공",
+        "이 영상(입니다|이었습니다|을 (보|시청))",
+        "영상(을|이) (도움|재미)",
     ).map { Regex(it) }
 
     fun isLikely(text: String): Boolean {
         val t = text.trim().trimEnd('.', '!', '?', '~', ' ')
         if (t.isEmpty()) return true
         return t.length <= 40 && patterns.any { it.containsMatchIn(t) }
+    }
+}
+
+/** Whisper 반복 출력 정리 */
+object Repetition {
+    /** 비교용: 공백·문장부호 제거 */
+    fun normalize(t: String) = t.replace(Regex("[^0-9A-Za-z가-힣]"), "")
+
+    private val shortToken = Regex("""(\S{1,10}?[.,!?…]*)(?:\s+\1){2,}""")          // 참. 참. 참. → 참.
+    private val longPhrase = Regex("""(.{6,60}?)(?:\s*\1){1,}""")                    // 같은 구절 2회 이상 연속 → 1회
+
+    /** 문장 안의 연속 반복을 한 번으로 줄임 */
+    fun collapse(t: String): String {
+        var r = shortToken.replace(t.trim()) { it.groupValues[1] }
+        r = longPhrase.replace(r) { m -> if (m.groupValues[1].isNotBlank()) m.groupValues[1] else m.value }
+        return r.trim()
     }
 }
