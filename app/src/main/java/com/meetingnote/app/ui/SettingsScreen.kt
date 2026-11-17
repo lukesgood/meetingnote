@@ -110,6 +110,22 @@ fun SettingsScreen(onBack: () -> Unit) {
                 HorizontalDivider()
                 ModelOption(ModelCatalog.VAD, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = { confirmDelete = ModelCatalog.VAD })
+                HorizontalDivider()
+                var refine by remember { mutableStateOf(settings.refine) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("회의 후 정밀 인식", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text("녹음이 끝나면 정밀 모델로 전체를 다시 인식해 녹취록을 바꾼 뒤 회의록을 만듭니다. " +
+                            "작은 목소리·숫자·직함 인식이 크게 좋아지지만 녹음 시간의 약 0.7배가 더 걸립니다. " +
+                            "가져온 음성 파일과 '다시 인식'에도 적용됩니다. (통역 회의는 제외)",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(refine, { refine = it; settings.refine = it })
+                }
+                ModelOption(ModelCatalog.REFINER, selected = null, tick = tick, busy = engine.busy,
+                    onSelect = {}, onDelete = { confirmDelete = ModelCatalog.REFINER })
+                if (refine && !MeetingEngine.models.isReady(ModelCatalog.REFINER))
+                    Hint("정밀 인식을 쓰려면 위 모델(874MB)을 내려받으세요. 없으면 실시간 녹취록으로 회의록을 만듭니다.")
             }
         }
         val llmCard: @Composable () -> Unit = {

@@ -10,6 +10,11 @@ data class GenerationStats(
     val genTps get() = if (genMs > 0) genTokens * 1000.0 / genMs else 0.0
 }
 
+/** 프롬프트 처리 진행 (done/total 토큰, 재사용분 제외) */
+fun interface PromptProgress {
+    fun onPrompt(done: Int, total: Int)
+}
+
 fun interface TokenCallback {
     /** false 반환 시 생성 중단 */
     fun onToken(bytes: ByteArray): Boolean
@@ -35,11 +40,12 @@ class LlamaModel private constructor(private var handle: Long) : AutoCloseable {
         temperature: Float = 0.2f,
         topP: Float = 0.9f,
         repeatPenalty: Float = 1.05f,
+        onPrompt: PromptProgress? = null,
         onText: (String) -> Boolean,
     ): GenerationStats {
-        val r = LlamaLib.nativeGenerate(handle, prompt, maxTokens, temperature, topP, repeatPenalty) {
+        val r = LlamaLib.nativeGenerate(handle, prompt, maxTokens, temperature, topP, repeatPenalty, {
             onText(String(it, Charsets.UTF_8))
-        }
+        }, onPrompt)
         if (r.startsWith("error:")) throw IllegalStateException(r.removePrefix("error:"))
         val p = r.split(',').map { it.toLong() }
         return GenerationStats(p[0].toInt(), p[1], p[2].toInt(), p[3], p.getOrNull(4)?.toInt() ?: 0)
@@ -78,7 +84,7 @@ internal object LlamaLib {
     external fun nativeCancel(handle: Long)
     external fun nativeGenerate(
         handle: Long, prompt: String, maxTokens: Int, temperature: Float, topP: Float,
-        repeatPenalty: Float, callback: TokenCallback,
+        repeatPenalty: Float, callback: TokenCallback, progress: PromptProgress?,
     ): String
     external fun nativeSystemInfo(): String
 }

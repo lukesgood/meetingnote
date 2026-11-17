@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Phase { IDLE, LOADING, RECORDING, FINISHING_STT, TRANSCRIBING_FILE, SUMMARIZING, ERROR }
+enum class Phase { IDLE, LOADING, RECORDING, FINISHING_STT, TRANSCRIBING_FILE, REFINING, SUMMARIZING, ERROR }
 
 data class EngineState(
     val phase: Phase = Phase.IDLE,
@@ -37,6 +37,9 @@ data class EngineState(
     val interpreting: Boolean = false,
     /** 번역 대기 문장 수 */
     val translatePending: Int = 0,
+    /** 정밀 인식 진행률 0..1, 남은 시간(초) */
+    val refineFraction: Float? = null,
+    val refineEtaSec: Int? = null,
 ) {
     val busy get() = phase != Phase.IDLE && phase != Phase.ERROR
 }
@@ -319,7 +322,14 @@ object MeetingEngine {
             repo.saveTranscript(id, lines)
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
             releaseWhisper()
-            if (autoSummarize && lines.isNotEmpty()) summarizeInternal(id) else { releaseSharedLlm(); finishIdle() }
+            try {
+                if (shouldRefine(lines)) refineInternal(id)
+            } catch (e: Throwable) {
+                // 정밀 인식이 실패해도 실시간 녹취록으로 회의록은 만든다
+                Log.e(TAG, "refine failed", e); ErrorReporter.recordError(e)
+            }
+            val finalLines = _state.value.lines
+            if (autoSummarize && finalLines.isNotEmpty()) summarizeInternal(id) else { releaseSharedLlm(); finishIdle() }
         }
     }
 
@@ -331,6 +341,20 @@ object MeetingEngine {
         if (!checkModels(sttSpec)) return
         _state.value = EngineState(Phase.TRANSCRIBING_FILE, meetingId = meetingId, message = "음성 파일 인식 중…")
         startService()
+        // 파일 인식(가져오기·다시 인식)은 실시간 표시가 필요 없으므로 바로 정밀 인식
+        if (shouldRefine(repo.loadTranscript(meetingId))) {
+            scope.launch {
+                try {
+                    val totalMs = wavSampleCount(repo.audioFile(meetingId)) * 1000L / AudioRecorder.SAMPLE_RATE
+                    repo.get(meetingId)?.let { repo.save(it.copy(durationMs = totalMs, recording = false, recovered = false)) }
+                    refineInternal(meetingId)
+                    if (thenSummarize && _state.value.lines.isNotEmpty()) summarizeInternal(meetingId) else finishIdle()
+                } catch (e: Throwable) {
+                    fail(e)
+                }
+            }
+            return
+        }
         scope.launch {
             try {
                 val w = withContext(inference) {
@@ -393,6 +417,99 @@ object MeetingEngine {
                 fail(e)
             }
         }
+    }
+
+    // ------------------------------------------------- 회의 후 정밀 인식
+
+    /** 정밀 인식 대상: 설정이 켜져 있고 모델이 있으며, 통역 회의가 아님(번역이 실시간 녹취 문장에 붙어 있음) */
+    private fun shouldRefine(lines: List<TranscriptLine>) =
+        settings.refine && models.isReady(ModelCatalog.REFINER) && !settings.interpret && lines.none { it.translation != null }
+
+    /**
+     * 녹음 전체를 정밀 모델(large-v3-turbo)로 다시 인식해 녹취록을 교체한다.
+     * 실시간 인식(짧은 조각 + 앞 문장 문맥)과 달리 최대 5분 단위로 길게 넣고 앞 구간 결과를 문맥으로 넘기지 않아
+     * 작은 목소리·숫자·직함 오인식과 환각 반복이 크게 줄었다 (2026-11-17 실제 회의 녹음 비교).
+     * 원래 실시간 녹취록은 transcript_live.json으로 보관.
+     */
+    private suspend fun refineInternal(id: String) = withContext(inference) {
+        val spec = ModelCatalog.REFINER
+        val audio = repo.audioFile(id)
+        val total = wavSampleCount(audio)
+        if (total < AudioRecorder.SAMPLE_RATE) return@withContext
+        val sr = AudioRecorder.SAMPLE_RATE
+        _state.update { it.copy(phase = Phase.REFINING, message = "정밀 인식 모델 불러오는 중…", refineFraction = 0f, refineEtaSec = null) }
+        ErrorReporter.trail("정밀 인식 시작: ${total / sr}초")
+        releaseSharedLlm()
+        val w = loadWhisper(spec)
+        val vocab = settings.vocabulary.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+            .joinToString(", ").take(150).ifEmpty { null }
+        val maxBlock = 5 * 60 * sr
+        val buf = ShortArray(maxBlock + sr)
+        var len = 0
+        var offset = 0L
+        val out = ArrayList<TranscriptLine>()
+        val recent = ArrayDeque<String>()
+        val t0 = System.currentTimeMillis()
+
+        fun progress(done: Double) {
+            val f = (done / total).toFloat().coerceIn(0f, 1f)
+            val el = (System.currentTimeMillis() - t0) / 1000.0
+            val eta = if (f > 0.03) (el / f * (1 - f)).toInt() else null
+            _state.update { it.copy(refineFraction = f, refineEtaSec = eta,
+                message = "정밀 인식 중 ${(f * 100).toInt()}% (녹음 ${formatTime(done.toLong() * 1000 / sr)} / ${formatTime(total * 1000 / sr)})") }
+        }
+
+        fun process(n: Int) {
+            val pcm = FloatArray(n) { buf[it] / 32768f }
+            val base = offset
+            val r = w.transcribe(pcm, threads = settings.threads, language = "ko", beamSize = 5,
+                initialPrompt = vocab, vadModelPath = models.file(ModelCatalog.VAD).path,
+                noContext = true, onProgress = { pct -> progress(base + n * pct / 100.0) })
+            val offMs = base * 1000 / sr
+            for (seg in r.segments) {
+                val text = Repetition.collapse(seg.text)
+                val key = Repetition.normalize(text)
+                if (Hallucination.isLikely(text) || (key.length >= 2 && key in recent)) continue
+                out += TranscriptLine(offMs + seg.startMs, offMs + seg.endMs, text, lang = "ko")
+                if (key.length >= 2) { recent.addLast(key); while (recent.size > 5) recent.removeFirst() }
+            }
+            System.arraycopy(buf, n, buf, 0, len - n)
+            len -= n; offset += n
+            progress(offset.toDouble())
+        }
+
+        /** 블록 끝 20초 안에서 가장 조용한 100ms 지점 (말을 자르지 않도록) */
+        fun quietCut(): Int {
+            val frame = sr / 10
+            var best = len; var bestE = Double.MAX_VALUE
+            var i = len - 20 * sr
+            while (i + frame <= len) {
+                var e = 0.0
+                for (j in i until i + frame) { val v = buf[j].toDouble(); e += v * v }
+                if (e < bestE) { bestE = e; best = i + frame / 2 }
+                i += frame / 2
+            }
+            return best
+        }
+
+        progress(0.0)
+        readWavBlocks(audio, sr / 10) { block ->
+            System.arraycopy(block, 0, buf, len, block.size); len += block.size
+            if (len >= maxBlock) process(quietCut())
+        }
+        if (len > sr / 2) process(len)
+        releaseWhisper()
+
+        if (out.isNotEmpty()) {
+            repo.backupLiveTranscript(id)
+            repo.saveTranscript(id, out)
+            repo.get(id)?.let { repo.save(it.copy(sttModel = "${spec.title.substringBefore(" (")} (정밀 인식)")) }
+            _state.update { it.copy(lines = out) }
+        }
+        val sec = (System.currentTimeMillis() - t0) / 1000
+        Log.i(TAG, "refine done: ${total / sr}s audio in ${sec}s, ${out.size} lines")
+        ErrorReporter.trail("정밀 인식 완료: ${sec}초, ${out.size}문장")
+        _state.update { it.copy(refineFraction = null, refineEtaSec = null, message = null) }
     }
 
     // ---------------------------------------------------------------- 요약
@@ -517,6 +634,10 @@ class Settings(context: Context) {
     var minutesLang: String
         get() = prefs.getString("minutes_lang", "ko") ?: "ko"
         set(v) = prefs.edit().putString("minutes_lang", v).apply()
+    /** 회의 후 정밀 인식 (large-v3-turbo 모델이 있을 때) */
+    var refine: Boolean
+        get() = prefs.getBoolean("refine", true)
+        set(v) = prefs.edit().putBoolean("refine", v).apply()
     /** 짧은 조각 인코더 창 축소 (실측: 정확도 동일, 조각당 처리 7.2s → 2.0s) */
     var trimEncoder: Boolean
         get() = prefs.getBoolean("trim_encoder", true)

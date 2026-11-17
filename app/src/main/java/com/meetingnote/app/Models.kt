@@ -43,6 +43,17 @@ object ModelCatalog {
         note = "무음 구간 제거 · 문장 누락 방지",
     )
 
+    /** 회의 후 정밀 인식용 (녹음 중 실시간 인식은 small) */
+    val WHISPER_TURBO = ModelSpec(
+        id = "whisper-large-v3-turbo-q8",
+        title = "Whisper large-v3-turbo (q8_0)",
+        fileName = "ggml-large-v3-turbo-q8_0.bin",
+        url = "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
+        sizeBytes = 874_188_075,
+        kind = ModelSpec.Kind.STT,
+        note = "회의 후 정밀 인식 · 작은 목소리·숫자·직함 인식이 크게 좋아짐 · 녹음 시간의 약 0.7배 소요",
+    )
+
     val QWEN3_4B = ModelSpec(
         id = "qwen3-4b",
         title = "Qwen3 4B Instruct 2507 (Q4_0)",
@@ -67,10 +78,12 @@ object ModelCatalog {
     val llms = listOf(QWEN3_4B, EXAONE_1B)
     /** 실시간 통역 모델: 요약 모델 설정과 무관하게 항상 Qwen3 (EXAONE은 영→한 번역이 되지 않음, 2026-11-17 비교) */
     val INTERPRETER = QWEN3_4B
-    val all = listOf(WHISPER, VAD, QWEN3_4B, EXAONE_1B)
+    val all = listOf(WHISPER, WHISPER_TURBO, VAD, QWEN3_4B, EXAONE_1B)
+    /** 회의 후 정밀 인식 모델 */
+    val REFINER = WHISPER_TURBO
 
     /** 이전 버전에서 제공했다가 삭제한 모델 파일 (앱 시작 시 정리) */
-    val removedFiles = listOf("ggml-large-v3-turbo-q8_0.bin")
+    val removedFiles = emptyList<String>()
 }
 
 class ModelStore(private val context: Context) {

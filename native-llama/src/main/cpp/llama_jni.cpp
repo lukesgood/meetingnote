@@ -212,12 +212,14 @@ Java_com_meetingnote_llama_LlamaLib_nativeCancel(JNIEnv *, jobject, jlong h) {
 // 반환: 성능 정보 문자열 "prompt_tokens,prompt_ms,gen_tokens,gen_ms"
 JNIEXPORT jstring JNICALL
 Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong h, jstring prompt,
-        jint maxTokens, jfloat temperature, jfloat topP, jfloat repeatPenalty, jobject callback) {
+        jint maxTokens, jfloat temperature, jfloat topP, jfloat repeatPenalty, jobject callback, jobject progress) {
     auto * s = reinterpret_cast<Session *>(h);
     s->cancel = false;
 
     jclass cbCls = env->GetObjectClass(callback);
     jmethodID onToken = env->GetMethodID(cbCls, "onToken", "([B)Z");
+    jmethodID onPrompt = nullptr;
+    if (progress) onPrompt = env->GetMethodID(env->GetObjectClass(progress), "onPrompt", "(II)V");
 
     mn::pin_current_thread((int) llama_n_threads(s->ctx));
     llama_memory_t mem = llama_get_memory(s->ctx);
@@ -249,11 +251,14 @@ Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong 
     };
 
     const int64_t t0 = ggml_time_us();
-    const int n_batch = (int) llama_n_batch(s->ctx);
+    // 진행률을 받는 경우 더 잘게 나눠 처리 (긴 프롬프트도 화면 진척이 자주 갱신되도록)
+    const int n_batch = onPrompt ? std::min<int>(256, (int) llama_n_batch(s->ctx)) : (int) llama_n_batch(s->ctx);
+    const int to_eval = (int) (toks.size() - common);
     for (size_t i = common; i < toks.size(); i += n_batch) {
         int n = std::min<int>(n_batch, (int) (toks.size() - i));
         if (llama_decode(s->ctx, llama_batch_get_one(toks.data() + i, n)) != 0) return fail("error:decode_failed");
         s->cached.insert(s->cached.end(), toks.begin() + i, toks.begin() + i + n);
+        if (onPrompt) env->CallVoidMethod(progress, onPrompt, (jint) (i + n - common), (jint) to_eval);
         if (s->cancel) return fail("error:cancelled");
     }
     const int64_t t1 = ggml_time_us();

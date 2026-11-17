@@ -68,9 +68,9 @@ class MeetingService : Service() {
 
         scope.launch {
             MeetingEngine.state
-                .map { Triple(it.phase, it.summaryStage, it.elapsedMs / 1000) }
+                .map { NotiKey(it.phase, it.summaryStage, it.elapsedMs / 1000, it.refineFraction?.let { f -> (f * 100).toInt() }) }
                 .distinctUntilChanged()
-                .collect { (phase, stage, sec) ->
+                .collect { (phase, stage, sec, _) ->
                     if (phase == Phase.IDLE || phase == Phase.ERROR) {
                         ServiceCompat.stopForeground(this@MeetingService, ServiceCompat.STOP_FOREGROUND_REMOVE)
                         stopSelf()
@@ -82,6 +82,7 @@ class MeetingService : Service() {
                         Phase.FINISHING_STT -> "남은 음성 인식 중…"
                         Phase.TRANSCRIBING_FILE -> "음성 파일 인식 중… ${formatTime(sec * 1000)}"
                         Phase.SUMMARIZING -> "회의록 작성 중 · $stage"
+                        Phase.REFINING -> MeetingEngine.state.value.message ?: "정밀 인식 중…"
                         else -> ""
                     }
                     val type = if (phase == Phase.RECORDING || phase == Phase.LOADING)
@@ -150,3 +151,6 @@ class MeetingService : Service() {
         super.onDestroy()
     }
 }
+
+/** 알림 갱신 기준 (정밀 인식은 1% 단위로 갱신) */
+private data class NotiKey(val phase: Phase, val stage: String, val sec: Long, val refinePct: Int?)

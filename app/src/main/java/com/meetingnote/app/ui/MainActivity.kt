@@ -112,6 +112,7 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra("llm")
         }
         intent?.getStringExtra("minutes_lang")?.let { MeetingEngine.settings.minutesLang = it; intent.removeExtra("minutes_lang") }
+        if (intent?.hasExtra("refine") == true) { MeetingEngine.settings.refine = intent.getBooleanExtra("refine", true); intent.removeExtra("refine") }
         if (intent?.hasExtra("trim_encoder") == true) { MeetingEngine.settings.trimEncoder = intent.getBooleanExtra("trim_encoder", false); intent.removeExtra("trim_encoder") }
         // 테스트용: 기존 회의의 회의록만 다시 생성 (--es summarize_id <id>)
         intent?.getStringExtra("summarize_id")?.let { id ->

@@ -91,6 +91,13 @@ class MeetingRepository(context: Context) {
         dir(id).deleteRecursively()
     }
 
+    /** 정밀 인식으로 교체하기 전의 실시간 녹취록 보관 */
+    fun backupLiveTranscript(id: String) {
+        val f = transcriptFile(id)
+        val b = File(dir(id), "transcript_live.json")
+        if (f.exists() && !b.exists()) f.copyTo(b)
+    }
+
     fun saveTranscript(id: String, lines: List<TranscriptLine>) {
         val arr = JSONArray()
         lines.forEach {

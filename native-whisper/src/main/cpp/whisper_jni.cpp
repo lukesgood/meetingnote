@@ -53,7 +53,7 @@ JNIEXPORT jbyteArray JNICALL
 Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
         JNIEnv * env, jobject, jlong handle, jfloatArray pcm, jint threads,
         jstring lang, jint beamSize, jstring initialPrompt, jstring vadModelPath, jint audioCtx,
-        jboolean koEnOnly) {
+        jboolean koEnOnly, jboolean noContext, jobject progress) {
     auto * ctx = reinterpret_cast<whisper_context *>(handle);
     if (!ctx) return nullptr;
 
@@ -88,6 +88,18 @@ Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
     }
     // 짧은 조각은 인코더 창을 실제 길이에 맞게 줄여 연산 절감 (0 = 기본 30초 창)
     if (audioCtx > 0) p.audio_ctx = audioCtx;
+    // 앞 구간 인식 결과를 다음 30초 창의 문맥으로 넘기지 않음 (잘못 인식한 문장이 이어지며 번지는 것 방지)
+    if (noContext) { p.no_context = true; p.n_max_text_ctx = 0; }
+    // 진행률(0~100) 콜백: 긴 오디오 정밀 인식의 진행 표시용
+    struct Prog { JNIEnv * env; jobject obj; jmethodID mid; } prog { env, progress, nullptr };
+    if (progress) {
+        prog.mid = env->GetMethodID(env->GetObjectClass(progress), "onProgress", "(I)V");
+        p.progress_callback = [](whisper_context *, whisper_state *, int pct, void * ud) {
+            auto * pr = static_cast<Prog *>(ud);
+            pr->env->CallVoidMethod(pr->obj, pr->mid, (jint) pct);
+        };
+        p.progress_callback_user_data = &prog;
+    }
 
     if (whisper_full(ctx, p, samples.data(), (int) samples.size()) != 0) {
         LOGE("whisper_full failed");

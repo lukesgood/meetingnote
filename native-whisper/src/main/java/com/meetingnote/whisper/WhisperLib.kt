@@ -1,5 +1,9 @@
 package com.meetingnote.whisper
 
+fun interface ProgressCallback {
+    fun onProgress(percent: Int)
+}
+
 data class Segment(val startMs: Long, val endMs: Long, val text: String)
 
 /** 인식 결과: 감지된(또는 지정한) 언어 코드와 문장들 */
@@ -19,10 +23,14 @@ class WhisperContext private constructor(private var handle: Long) : AutoCloseab
         audioCtx: Int = 0,
         /** language가 빈 문자열(자동 감지)일 때 한국어/영어로만 제한 */
         koEnOnly: Boolean = false,
+        /** 30초 창 사이에 앞 인식 결과를 문맥으로 넘기지 않음 (긴 오디오 정밀 인식용) */
+        noContext: Boolean = false,
+        /** 진행률 0~100 */
+        onProgress: ProgressCallback? = null,
     ): Transcription {
         check(handle != 0L) { "closed" }
         val bytes = WhisperLib.nativeTranscribe(
-            handle, pcm, threads, language, beamSize, initialPrompt, vadModelPath, audioCtx, koEnOnly
+            handle, pcm, threads, language, beamSize, initialPrompt, vadModelPath, audioCtx, koEnOnly, noContext, onProgress
         ) ?: error("transcription failed")
         val lines = String(bytes, Charsets.UTF_8).lineSequence().toList()
         val lang = lines.firstOrNull { it.startsWith("#lang\t") }?.substringAfter('\t')?.trim().orEmpty()
@@ -64,6 +72,7 @@ internal object WhisperLib {
     external fun nativeTranscribe(
         handle: Long, pcm: FloatArray, threads: Int, lang: String, beamSize: Int,
         initialPrompt: String?, vadModelPath: String?, audioCtx: Int, koEnOnly: Boolean,
+        noContext: Boolean, progress: ProgressCallback?,
     ): ByteArray?
     external fun nativeSystemInfo(): String
 }

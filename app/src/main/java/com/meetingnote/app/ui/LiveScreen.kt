@@ -71,6 +71,7 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                         Phase.LOADING -> "준비 중"
                         Phase.RECORDING -> if (paused) "일시정지" else "녹음 중"
                         Phase.FINISHING_STT, Phase.TRANSCRIBING_FILE -> "음성 인식 중"
+                        Phase.REFINING -> "정밀 인식 중"
                         Phase.SUMMARIZING -> "회의록 작성 중"
                         Phase.ERROR -> "오류"
                         Phase.IDLE -> "완료"
@@ -93,6 +94,15 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                             Spacer(Modifier.width(12.dp))
                             Text(s.message ?: s.summaryStage, Modifier.weight(1f))
                         }
+                    }
+                    s.refineFraction?.let { f ->
+                        val anim by androidx.compose.animation.core.animateFloatAsState(f, label = "refine")
+                        androidx.compose.material3.LinearProgressIndicator(progress = { anim }, modifier = Modifier.fillMaxWidth())
+                        Text(
+                            "정밀 모델(large-v3-turbo)로 녹음 전체를 다시 인식해 녹취록 정확도를 높이는 중입니다." +
+                                (s.refineEtaSec?.let { e -> " 남은 시간 약 ${if (e < 60) "${e}초" else "${e / 60}분"}" } ?: ""),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     if (s.phase == Phase.RECORDING) {
                         val scope by MeetingEngine.scopeData.collectAsState()
