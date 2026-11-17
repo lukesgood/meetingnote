@@ -161,7 +161,9 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                         Text(
                             when (state.phase) {
                                 Phase.RECORDING -> "● 녹음 중 ${formatTime(state.elapsedMs)}"
-                                Phase.SUMMARIZING -> "회의록 작성 중 · ${state.summaryStage}"
+                                Phase.SUMMARIZING -> state.summary?.let { su ->
+                                    su.fraction?.let { f -> "회의록 작성 중 · ${(f * 100).toInt()}% · ${etaText(su.etaSec)}" }
+                                } ?: "회의록 작성 중 · ${state.summaryStage}"
                                 else -> state.message ?: "처리 중…"
                             }, fontWeight = FontWeight.SemiBold
                         )

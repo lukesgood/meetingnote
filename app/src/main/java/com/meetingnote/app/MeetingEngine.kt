@@ -40,6 +40,8 @@ data class EngineState(
     /** 정밀 인식 진행률 0..1, 남은 시간(초) */
     val refineFraction: Float? = null,
     val refineEtaSec: Int? = null,
+    /** 회의록 작성 진행 (단계·진행률·남은 시간) */
+    val summary: SummaryUi? = null,
 ) {
     val busy get() = phase != Phase.IDLE && phase != Phase.ERROR
 }
@@ -531,16 +533,26 @@ object MeetingEngine {
             _state.update { it.copy(phase = Phase.ERROR, message = "요약 모델이 없습니다: ${spec.title}") }
             return@withContext
         }
-        _state.update { it.copy(phase = Phase.SUMMARIZING, summaryText = "", summaryStage = "요약 모델 불러오는 중…", message = null) }
+        val t0 = System.currentTimeMillis()
+        _state.update { it.copy(phase = Phase.SUMMARIZING, summaryText = "", summaryStage = "요약 모델 불러오는 중…", message = null,
+            summary = SummaryUi(startedAt = t0)) }
         val transcript = repo.loadTranscript(id).ifEmpty { _state.value.lines }
         var llm: LlamaModel? = null
+        // 진행 화면 갱신 (0.3초마다 추정치 계산: 네이티브 보고 사이를 속도로 보간)
+        val ticker = scope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(300)
+                summarizer?.let { sm -> _state.update { it.copy(summary = sm.tracker.snapshot().copy(startedAt = t0)) } }
+            }
+        }
         try {
-            val t0 = System.currentTimeMillis()
             ErrorReporter.trail("요약 모델 로드: ${spec.id}, 녹취 ${transcript.size}문장, 스레드 ${settings.threads}")
             // 통역용으로 이미 불러 둔 모델이 있으면 재사용 (다시 불러오는 시간 절약)
             llm = sharedLlm?.takeIf { sharedLlmSpec == spec }?.also { sharedLlm = null; sharedLlmSpec = null }
                 ?: run { releaseSharedLlm(); LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads) }
-            val s = Summarizer(llm, spec, vocabulary = settings.vocabulary, lang = settings.minutesLang).also { summarizer = it }
+            val speed = DeviceCheck.llmSpeed(spec)
+            val s = Summarizer(llm, spec, vocabulary = settings.vocabulary, lang = settings.minutesLang,
+                tracker = SummaryTracker(speed.promptTps, speed.genTps)).also { summarizer = it }
             val (minutes, stats) = s.summarize(
                 transcript,
                 onProgress = { p ->
@@ -571,8 +583,10 @@ object MeetingEngine {
         } catch (e: Throwable) {
             fail(e)
         } finally {
+            ticker.cancel()
             summarizer = null
             llm?.close()
+            _state.update { it.copy(summary = null) }
         }
     }
 

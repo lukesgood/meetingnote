@@ -86,7 +86,8 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
         val statusCard: @Composable () -> Unit = {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (s.phase == Phase.SUMMARIZING) SummaryProgressCard(s.summary)
+                    else Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(formatTime(s.elapsedMs), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(16.dp))
                         if (s.busy && s.phase != Phase.RECORDING) {
@@ -110,7 +111,7 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                             crtHeight = when { s.interpreting -> 170.dp; wideLayout -> 400.dp; else -> 240.dp })
                     }
                     val rtf = s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중"
-                    Text(
+                    if (s.phase != Phase.SUMMARIZING) Text(
                         "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개" +
                             (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
                         style = MaterialTheme.typography.bodySmall,
@@ -141,12 +142,27 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
         // 녹취록 또는 생성 중인 회의록
         val contentPane: @Composable ColumnScope.() -> Unit = {
             if (s.phase == Phase.SUMMARIZING) {
-                Text("회의록 (생성 중)", style = MaterialTheme.typography.titleMedium)
+                val su = s.summary
+                val reading = s.summaryText.isEmpty() && su?.writing != true
+                Text(
+                    when {
+                        su == null || su.phase == 0 -> "요약 모델 준비 중"
+                        reading -> if (su.readLines != null) "녹취록 읽는 중" else "구간 메모 모아 읽는 중"
+                        su.phase == 2 -> "회의록 쓰는 중"
+                        su.phase == 3 -> "회의록 완성 · 제목 정하는 중"
+                        else -> "구간 메모 정리 중"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 Card(Modifier.fillMaxWidth().weight(1f)) {
-                    val scroll = rememberScrollState()
-                    LaunchedEffect(s.summaryText.length) { scroll.animateScrollTo(scroll.maxValue) }
-                    Column(Modifier.padding(16.dp).verticalScroll(scroll)) {
-                        MarkdownText(s.summaryText.ifEmpty { "모델이 녹취록을 읽는 중입니다…" })
+                    if (reading) ReadingView(s.lines, su, Modifier.fillMaxWidth())
+                    else {
+                        val scroll = rememberScrollState()
+                        LaunchedEffect(s.summaryText.length) { scroll.animateScrollTo(scroll.maxValue) }
+                        val cursor = if (su?.writing == true) rememberCursor() else ""
+                        Column(Modifier.padding(16.dp).verticalScroll(scroll)) {
+                            MarkdownText(s.summaryText + cursor)
+                        }
                     }
                 }
             } else if (s.interpreting) {

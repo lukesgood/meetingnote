@@ -18,6 +18,8 @@ class Summarizer(
     vocabulary: String = "",
     /** 회의록 언어: "ko" 한국어, "en" 영어 (녹취록이 한·영 혼합이어도 이 언어로 작성) */
     private val lang: String = "ko",
+    /** 진행률·남은 시간 추정 (화면 표시용) */
+    val tracker: SummaryTracker = SummaryTracker(30.0, 6.0),
 ) {
     private val en get() = lang == "en"
     data class Progress(val stage: String, val step: Int, val total: Int)
@@ -125,33 +127,43 @@ class Summarizer(
         val full = transcript.joinToString("\n") { it.text }
         require(full.isNotBlank()) { "녹취록이 비어 있습니다" }
 
+        val allLines = transcript.indices
         if (llm.countTokens(full) <= singlePassBudget) {
+            val final = SummaryTracker.Step(SummaryTracker.Kind.FINAL, "회의록 작성", llm.countTokens(finalPrompt(full, false)), 380, allLines)
+            tracker.plan(listOf(final, SummaryTracker.Step(SummaryTracker.Kind.TITLE, "제목", 150, 16)))
             onProgress(Progress("회의록 작성", 1, 1))
-            val out = run(finalPrompt(full, false), maxOut, stats, onText)
+            val out = run(finalPrompt(full, false), maxOut, stats, onText, final)
             return out to stats
         }
 
         // Map: 토큰 예산에 맞춰 녹취록 분할 (문장 단위)
-        val chunks = splitByTokens(transcript.map { it.text }, chunkBudget)
+        val ranges = splitRanges(transcript.map { it.text }, chunkBudget)
+        val chunks = ranges.map { r -> r.joinToString("") { transcript[it].text + "\n" } }
+        val readSteps = chunks.mapIndexed { i, part ->
+            SummaryTracker.Step(SummaryTracker.Kind.READ, "구간 ${i + 1}", llm.countTokens(mapPrompt(part, i + 1, chunks.size)), 200, ranges[i])
+        }
+        val final = SummaryTracker.Step(SummaryTracker.Kind.FINAL, "회의록 작성", chunks.size * 220 + 700, 380)
+        tracker.plan(readSteps + final + SummaryTracker.Step(SummaryTracker.Kind.TITLE, "제목", 150, 16))
         val notes = chunks.mapIndexed { i, part ->
             onProgress(Progress("구간 요약", i + 1, chunks.size + 1))
             onText("") // 화면 초기화 신호
-            run(mapPrompt(part, i + 1, chunks.size), 300, stats, onText)
+            run(mapPrompt(part, i + 1, chunks.size), 300, stats, onText, readSteps[i])
         }
 
         // Reduce: 메모가 길면 한 번 더 압축
         var merged = notes.mapIndexed { i, n -> "[구간 ${i + 1}]\n$n" }.joinToString("\n\n")
         if (llm.countTokens(merged) > singlePassBudget) {
             val groups = splitByTokens(notes, chunkBudget)
+            val steps = groups.map { g -> SummaryTracker.Step(SummaryTracker.Kind.COMPRESS, "메모 압축", llm.countTokens(g), 200).also { tracker.insertBeforeFinal(it) } }
             merged = groups.mapIndexed { i, g ->
                 onProgress(Progress("메모 압축", i + 1, groups.size))
                 onText("")
-                run(mapPrompt(g, i + 1, groups.size), 300, stats, onText)
+                run(mapPrompt(g, i + 1, groups.size), 300, stats, onText, steps[i])
             }.joinToString("\n\n")
         }
         onProgress(Progress("회의록 작성", chunks.size + 1, chunks.size + 1))
         onText("")
-        val out = run(finalPrompt(merged, true), maxOut, stats, onText)
+        val out = run(finalPrompt(merged, true), maxOut, stats, onText, final)
         return out to stats
     }
 
@@ -167,20 +179,29 @@ class Summarizer(
                 "No quotes or explanation, only the title.\n\n$summary"
         else "다음 회의 요약을 보고 회의 제목을 20자 이내의 한국어 명사구 하나로만 답하세요. " +
                 "따옴표나 설명 없이 제목만 쓰세요.\n\n$summary"
-        val t = run(prompt, 32, mutableListOf()) {}
+        val t = run(prompt, 32, mutableListOf(), {}, tracker.step(SummaryTracker.Kind.TITLE))
             .lineSequence().firstOrNull { it.isNotBlank() }
             ?.trim()?.trim('"', '\'', '“', '”', '*', '#', ' ')?.removePrefix("제목:")?.removePrefix("Title:")?.trim()
         return t?.takeIf { it.length in 2..60 }
     }
 
-    private fun run(user: String, maxTokens: Int, stats: MutableList<GenerationStats>, onText: (String) -> Unit): String {
+    private fun run(
+        user: String, maxTokens: Int, stats: MutableList<GenerationStats>, onText: (String) -> Unit,
+        step: SummaryTracker.Step? = null,
+    ): String {
         val prompt = llm.formatChat(null, user, spec.assistantPrefix)
+        step?.let { tracker.begin(it, llm.countTokens(prompt)) }
         val sb = StringBuilder()
-        val st = llm.generate(prompt, maxTokens = maxTokens, temperature = 0.2f, repeatPenalty = 1.05f) {
+        val st = llm.generate(
+            prompt, maxTokens = maxTokens, temperature = 0.2f, repeatPenalty = 1.05f,
+            onPrompt = if (step != null) { d, t -> tracker.onPrompt(d, t) } else null,
+        ) {
+            if (step != null) tracker.onToken()
             sb.append(it)
             onText(stripThink(sb.toString()))
             true
         }
+        if (step != null) tracker.end(st)
         stats += st
         return stripThink(sb.toString()).trim()
     }
@@ -189,6 +210,24 @@ class Summarizer(
      * 균등 분할: 예산을 넘지 않는 최소 조각 수를 구한 뒤 조각 크기를 고르게 맞춘다.
      * (예: 3600토큰 → 3200+400 대신 1800+1800. 긴 프롬프트일수록 토큰당 처리 속도가 떨어지므로 유리)
      */
+    /** splitByTokens와 같은 분할을 줄 번호 범위로 (진행 화면에서 지금 읽는 구간 표시용) */
+    private fun splitRanges(lines: List<String>, budget: Int): List<IntRange> {
+        val counts = lines.map { llm.countTokens(it) + 1 }
+        val total = counts.sum()
+        val n = (total + budget - 1) / budget
+        val target = if (n <= 1) budget else (total + n - 1) / n
+        val out = mutableListOf<IntRange>()
+        var start = 0; var curTok = 0
+        for (i in lines.indices) {
+            if (curTok + counts[i] > target && i > start && out.size < n - 1) {
+                out += start until i; start = i; curTok = 0
+            }
+            curTok += counts[i]
+        }
+        if (start < lines.size) out += start until lines.size
+        return out
+    }
+
     private fun splitByTokens(lines: List<String>, budget: Int): List<String> {
         val counts = lines.map { llm.countTokens(it) + 1 }
         val total = counts.sum()

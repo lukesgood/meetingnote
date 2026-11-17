@@ -68,7 +68,7 @@ class MeetingService : Service() {
 
         scope.launch {
             MeetingEngine.state
-                .map { NotiKey(it.phase, it.summaryStage, it.elapsedMs / 1000, it.refineFraction?.let { f -> (f * 100).toInt() }) }
+                .map { NotiKey(it.phase, it.summaryStage, it.elapsedMs / 1000, (it.refineFraction ?: it.summary?.fraction)?.let { f -> (f * 100).toInt() }) }
                 .distinctUntilChanged()
                 .collect { (phase, stage, sec, _) ->
                     if (phase == Phase.IDLE || phase == Phase.ERROR) {
@@ -81,7 +81,9 @@ class MeetingService : Service() {
                         Phase.RECORDING -> "녹음 중 ${formatTime(sec * 1000)}"
                         Phase.FINISHING_STT -> "남은 음성 인식 중…"
                         Phase.TRANSCRIBING_FILE -> "음성 파일 인식 중… ${formatTime(sec * 1000)}"
-                        Phase.SUMMARIZING -> "회의록 작성 중 · $stage"
+                        Phase.SUMMARIZING -> MeetingEngine.state.value.summary?.let { su ->
+                            su.fraction?.let { f -> "회의록 작성 중 ${(f * 100).toInt()}% · ${su.detail} · ${com.meetingnote.app.ui.etaText(su.etaSec)}" }
+                        } ?: "회의록 작성 중 · $stage"
                         Phase.REFINING -> MeetingEngine.state.value.message ?: "정밀 인식 중…"
                         else -> ""
                     }
@@ -135,6 +137,8 @@ class MeetingService : Service() {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(pi)
+        val st = MeetingEngine.state.value
+        (st.refineFraction ?: st.summary?.fraction)?.let { f -> b.setProgress(100, (f * 100).toInt(), false) }
         if (phase == Phase.RECORDING || phase == Phase.SUMMARIZING) {
             val stop = PendingIntent.getService(
                 this, 1, Intent(this, MeetingService::class.java).setAction(ACTION_STOP),

@@ -68,6 +68,7 @@ class SummaryTracker(promptTps: Double, genTps: Double) {
     }
 
     fun onPrompt(done: Int, total: Int) {
+        cur?.promptTokens = total   // 앞부분 재사용으로 실제 계산량이 줄 수 있음
         promptDone = done; promptTotal = total; promptAt = System.currentTimeMillis()
         if (done >= total) inGen = true
     }

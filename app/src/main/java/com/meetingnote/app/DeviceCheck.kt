@@ -115,6 +115,10 @@ object DeviceCheck {
             prefs.edit().putString("bench", o.toString()).apply()
         }
 
+    /** 요약 모델의 처리 속도: 기기 점검 실측값, 없으면 기준 기기 값 */
+    fun llmSpeed(spec: ModelSpec): LlmBench =
+        bench?.llm?.get(spec.id) ?: REF_LLM[spec.id] ?: LlmBench(30.0, 6.0)
+
     /** 처리 시간 배율 (1 = 기준 기기와 같음, 2 = 두 배 걸림) */
     private fun llmFactor(id: String, b: LlmBench, promptShare: Double): Double {
         val ref = REF_LLM.getValue(id)
