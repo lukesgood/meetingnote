@@ -195,6 +195,7 @@ object ErrorReporter {
             appendLine("- Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) · ${Build.SUPPORTED_ABIS.firstOrNull()}")
             appendLine("- 설정: 요약 모델 ${s.llm.title}, 스레드 ${s.threads}, 용어 사전 ${if (s.vocabulary.isBlank()) "없음" else "사용(내용 제외)"}")
             appendLine("- 모델: $models")
+            appendLine("- 기기 점검: ${runCatching { DeviceCheck.summaryLine() }.getOrDefault("-")}")
             append("- 엔진 상태: ${MeetingEngine.state.value.phase}")
         }
 

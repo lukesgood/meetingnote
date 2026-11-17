@@ -124,7 +124,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
         val vocabCard: @Composable () -> Unit = { VocabularyCard() }
         val langCard: @Composable () -> Unit = { LanguageCard(tick) }
-        val perfCard: @Composable () -> Unit = { PerformanceCard() }
+        val perfCard: @Composable () -> Unit = { DeviceCheckCard(tick, busy = engine.busy); PerformanceCard() }
         val storageCard: @Composable () -> Unit = { StorageCard(tick) }
         val aboutCard: @Composable () -> Unit = { AboutCard(onReport = { reporting = true }) }
 
@@ -171,7 +171,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 // ---------------- 구성 요소 ----------------
 
 @Composable
-private fun SectionCard(
+internal fun SectionCard(
     icon: ImageVector, title: String, subtitle: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -191,7 +191,7 @@ private fun SectionCard(
 }
 
 @Composable
-private fun Hint(text: String) = Text(
+internal fun Hint(text: String) = Text(
     text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
 )
 

@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -47,6 +48,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MeetingNoteTheme {
+                // 기기 점검 중에는 화면을 켜 둠 (꺼지면 느린 코어로 옮겨져 점검이 무효가 됨)
+                val checking by com.meetingnote.app.MeetingEngine.checking.collectAsState()
+                val view = androidx.compose.ui.platform.LocalView.current
+                androidx.compose.runtime.DisposableEffect(checking != null) {
+                    view.keepScreenOn = checking != null
+                    onDispose { view.keepScreenOn = false }
+                }
                 BackHandler(enabled = screen != Screen.Home) { screen = Screen.Home }
                 when (val s = screen) {
                     Screen.Home -> HomeScreen(
@@ -93,6 +101,12 @@ class MainActivity : ComponentActivity() {
         }
         // 테스트용 설정: --ez interpret true|false, --es minutes_lang ko|en, --ez trim_encoder true|false
         if (intent?.hasExtra("interpret") == true) { MeetingEngine.settings.interpret = intent.getBooleanExtra("interpret", false); intent.removeExtra("interpret") }
+        if (intent?.getBooleanExtra("device_check_reset", false) == true) {   // 테스트: 첫 실행 상태로
+            intent.removeExtra("device_check_reset")
+            com.meetingnote.app.DeviceCheck.bench = null
+            getSharedPreferences("device_check", MODE_PRIVATE).edit().clear().apply()
+        }
+        if (intent?.getBooleanExtra("device_check", false) == true) { intent.removeExtra("device_check"); MeetingEngine.runDeviceCheck() }
         intent?.getStringExtra("llm")?.let { id ->
             com.meetingnote.app.ModelCatalog.llms.firstOrNull { it.id == id }?.let { MeetingEngine.settings.llm = it }
             intent.removeExtra("llm")

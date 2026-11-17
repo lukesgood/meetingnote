@@ -186,6 +186,9 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
                     }
                 }
             }
+            if (!state.busy) item(span = { GridItemSpan(maxLineSpan) }, key = "device_check") {
+                DeviceCheckBanner(tick, onOpenSettings = onOpenSettings, onDismissed = {})
+            }
             if (state.phase == Phase.ERROR) item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {

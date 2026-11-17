@@ -95,6 +95,7 @@ object MeetingEngine {
         repo = MeetingRepository(app)
         models = ModelStore(app)
         settings = Settings(app)
+        DeviceCheck.init(app)
         // 앱이 녹음 중 비정상 종료된 경우: WAV 헤더 복구 + 부분 녹취록 유지
         if (!_state.value.busy) repo.recoverUnfinished()
         // 삭제된 기능의 모델 파일 정리 (예: 고정밀 turbo 874MB)
@@ -102,6 +103,84 @@ object MeetingEngine {
         // 오류 보고용 동작 기록 (단계 변화만, 내용은 남기지 않음)
         scope.launch {
             state.map { it.phase }.distinctUntilChanged().collect { ErrorReporter.trail("단계: $it") }
+        }
+    }
+
+    // ---------------------------------------------------------------- 기기 점검
+
+    private val _checking = MutableStateFlow<String?>(null)
+    /** 기기 점검 진행 문구 (null = 점검 중 아님) */
+    val checking: StateFlow<String?> = _checking
+
+    /** 점검 중에는 녹음·인식·요약을 시작하지 않음 (같은 CPU·메모리를 써서 결과와 동작 모두 망가짐) */
+    private fun checkingBlocks(): Boolean {
+        if (_checking.value == null) return false
+        _state.value = EngineState(Phase.ERROR, message = "기기 점검 중입니다. 끝난 뒤(약 30초) 다시 시도해 주세요.")
+        return true
+    }
+
+    private class CheckInterrupted(msg: String) : Exception(msg)
+
+    /** 앱이 화면 앞에 있는지 (뒤로 가면 시스템이 느린 코어로 옮겨 실측값이 틀어짐) */
+    private fun inForeground(): Boolean =
+        android.app.ActivityManager.RunningAppProcessInfo().also { android.app.ActivityManager.getMyMemoryState(it) }
+            .importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+
+    /** 실측 점검: 음성인식 10초 처리 시간, 내려받은 요약 모델별 처리 속도 */
+    fun runDeviceCheck() {
+        if (_state.value.busy || _checking.value != null) return
+        _checking.value = "준비 중…"
+        ErrorReporter.trail("기기 점검 시작")
+        scope.launch(inference) {
+            try {
+                releaseSharedLlm()
+                val bg = CheckInterrupted("점검 중 앱이 화면에서 벗어나 결과를 저장하지 않았습니다. 화면을 켠 채로 다시 점검해 주세요.")
+                if (!inForeground()) throw bg
+                var rtf: Double? = null
+                if (missingSttModels().isEmpty()) {
+                    _checking.value = "음성인식 속도 측정 중…"
+                    val w = loadWhisper(settings.whisper)
+                    val pcm = DeviceCheck.loadSample()
+                    val audioCtx = ((pcm.size * 50L / AudioRecorder.SAMPLE_RATE + 64 + 63) / 64 * 64).toInt()
+                    var best = Long.MAX_VALUE
+                    repeat(2) {   // 첫 실행은 메모리 적재 등으로 느려 두 번 중 빠른 쪽
+                        val t0 = System.currentTimeMillis()
+                        w.transcribe(pcm.copyOf(), threads = settings.threads, language = "ko", beamSize = 5,
+                            vadModelPath = models.file(ModelCatalog.VAD).path,
+                            audioCtx = if (settings.trimEncoder) audioCtx else 0)
+                        best = minOf(best, System.currentTimeMillis() - t0)
+                    }
+                    rtf = best / (pcm.size * 1000.0 / AudioRecorder.SAMPLE_RATE)
+                    releaseWhisper()
+                    if (!inForeground()) throw bg
+                    Log.i("DeviceCheck", "stt ${best}ms rtf=%.3f".format(rtf))
+                }
+                val llm = mutableMapOf<String, DeviceCheck.LlmBench>()
+                for (spec in ModelCatalog.llms.filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
+                    _checking.value = "${spec.title.substringBefore(" (")} 속도 측정 중…"
+                    LlamaModel.load(models.file(spec).path, nCtx = 2048, threads = settings.threads).use { m ->
+                        // 예열 (모델 파일을 메모리에 올림)
+                        m.generate(m.formatChat(null, "안녕하세요", spec.assistantPrefix), maxTokens = 2, temperature = 0f) { true }
+                        val st = m.generate(m.formatChat(null, DeviceCheck.LLM_BENCH_TEXT, spec.assistantPrefix),
+                            maxTokens = 48, temperature = 0f) { true }
+                        if (!inForeground()) throw bg
+                        if (st.promptMs > 0 && st.genMs > 0 && st.genTokens >= 8) {
+                            llm[spec.id] = DeviceCheck.LlmBench(st.promptTps, st.genTps)
+                        }
+                        Log.i("DeviceCheck", "${spec.id} prompt ${st.promptTokens}tok/${st.promptMs}ms gen ${st.genTokens}tok/${st.genMs}ms " +
+                            "-> %.1f / %.2f tok/s".format(st.promptTps, st.genTps))
+                    }
+                }
+                DeviceCheck.bench = DeviceCheck.Bench(rtf, llm, System.currentTimeMillis(), settings.threads)
+                ErrorReporter.trail("기기 점검 완료")
+            } catch (e: Throwable) {
+                Log.e("DeviceCheck", "check failed", e)
+                if (e !is CheckInterrupted) ErrorReporter.recordError(e)
+                runCatching { releaseWhisper() }
+                _state.update { it.copy(phase = Phase.ERROR, message = "기기 점검 실패: ${e.message ?: e}") }
+            } finally {
+                _checking.value = null
+            }
         }
     }
 
@@ -125,7 +204,7 @@ object MeetingEngine {
     // ---------------------------------------------------------------- 녹음
 
     fun startRecording() {
-        if (_state.value.busy) return
+        if (_state.value.busy || checkingBlocks()) return
         val sttSpec = settings.whisper
         if (!checkModels(sttSpec)) return
         val meeting = repo.create().copy(sttModel = sttSpec.title).also { repo.save(it) }
@@ -248,7 +327,7 @@ object MeetingEngine {
 
     /** @param sttSpec 사용할 음성인식 모델 */
     fun transcribeFile(meetingId: String, thenSummarize: Boolean = true, sttSpec: ModelSpec = settings.whisper) {
-        if (_state.value.busy) return
+        if (_state.value.busy || checkingBlocks()) return
         if (!checkModels(sttSpec)) return
         _state.value = EngineState(Phase.TRANSCRIBING_FILE, meetingId = meetingId, message = "음성 파일 인식 중…")
         startService()
@@ -319,7 +398,7 @@ object MeetingEngine {
     // ---------------------------------------------------------------- 요약
 
     fun summarize(meetingId: String) {
-        if (_state.value.busy) return
+        if (_state.value.busy || checkingBlocks()) return
         _state.value = EngineState(Phase.SUMMARIZING, meetingId = meetingId, lines = repo.loadTranscript(meetingId))
         startService()
         scope.launch { summarizeInternal(meetingId) }
