@@ -130,7 +130,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                 meeting.modelUsed?.let { Badge(Icons.Default.AutoAwesome, "요약 " + it.substringBefore(" ("), c.surfaceContainerHigh, c.onSurface) }
                 meeting.stats?.let { Badge(null, it, c.surfaceContainerHigh, c.onSurfaceVariant) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(
                     enabled = !engine.busy && transcript.isNotEmpty(),
                     onClick = { MeetingEngine.summarize(id); onOpenLive() },

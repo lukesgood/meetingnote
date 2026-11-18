@@ -113,6 +113,11 @@ class MainActivity : ComponentActivity() {
         }
         intent?.getStringExtra("minutes_lang")?.let { MeetingEngine.settings.minutesLang = it; intent.removeExtra("minutes_lang") }
         if (intent?.hasExtra("refine") == true) { MeetingEngine.settings.refine = intent.getBooleanExtra("refine", true); intent.removeExtra("refine") }
+        // 테스트: --es cpu_variant base|dp|auto (앱을 다시 시작해야 적용)
+        intent?.getStringExtra("cpu_variant")?.let { v ->
+            getSharedPreferences("engine", MODE_PRIVATE).edit().apply { if (v == "auto") remove("cpu_variant") else putString("cpu_variant", v) }.commit()
+            intent.removeExtra("cpu_variant")
+        }
         if (intent?.hasExtra("trim_encoder") == true) { MeetingEngine.settings.trimEncoder = intent.getBooleanExtra("trim_encoder", false); intent.removeExtra("trim_encoder") }
         // 테스트용: 기존 회의의 회의록만 다시 생성 (--es summarize_id <id>)
         intent?.getStringExtra("summarize_id")?.let { id ->

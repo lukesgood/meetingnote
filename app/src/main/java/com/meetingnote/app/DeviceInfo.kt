@@ -33,8 +33,19 @@ object DeviceInfo {
             "SM8750" to "Snapdragon 8 Elite", "SM7675" to "Snapdragon 7+ Gen 3", "SM7550" to "Snapdragon 7 Gen 3",
             "MT6897" to "Dimensity 8300", "MT6989" to "Dimensity 9300", "MT6991" to "Dimensity 9400",
             "MT6878" to "Dimensity 7300", "MT6896" to "Dimensity 8200",
+            // MediaTek: SOC_MODEL(안드로이드 12+) 또는 HARDWARE(이전)는 MTxxxx 형태라 판매명으로 바꿔 표시
+            "MT6762" to "Helio P22", "MT6765" to "Helio P35/G35/G37", "MT6768" to "Helio P65",
+            "MT6769" to "Helio G70/G80/G85/G88", "MT6771" to "Helio P60/P70", "MT6779" to "Helio P90",
+            "MT6781" to "Helio G96", "MT6785" to "Helio G90/G95", "MT6789" to "Helio G99",
+            "MT6833" to "Dimensity 700/810/6020/6080", "MT6835" to "Dimensity 6100+/6300", "MT6853" to "Dimensity 720/800U",
+            "MT6873" to "Dimensity 800", "MT6875" to "Dimensity 820", "MT6877" to "Dimensity 900/920/1080/7050",
+            "MT6885" to "Dimensity 1000", "MT6886" to "Dimensity 7200", "MT6889" to "Dimensity 1000+",
+            "MT6891" to "Dimensity 1100/8020", "MT6893" to "Dimensity 1200/1300/8050", "MT6895" to "Dimensity 8100",
+            "MT6983" to "Dimensity 9000", "MT6985" to "Dimensity 9200",
         )
-        friendly[model.uppercase()] ?: if (Build.VERSION.SDK_INT >= 31) "${Build.SOC_MANUFACTURER} $model" else model
+        val up = model.uppercase()
+        // MediaTek은 "MT6789V/CD", "mt6771"처럼 뒤에 변형 표기가 붙거나 소문자로 오기도 함
+        (friendly[up] ?: Regex("MT\\d{4}").find(up)?.value?.let { friendly[it] }) ?: if (Build.VERSION.SDK_INT >= 31) "${Build.SOC_MANUFACTURER} $model" else model
     }
 
     /** 실측 기기 여부 (벤치마크 수치를 그대로 안내할 수 있는지) */

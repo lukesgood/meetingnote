@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 project(llama_jni C CXX)
 
+# 같은 소스를 CPU 세대별로 여러 번 빌드: 라이브러리 이름은 모듈이 지정 (기본 llama_jni)
+if(NOT MN_LIB_NAME)
+    set(MN_LIB_NAME llama_jni)
+endif()
+
 set(LLAMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/llama.cpp)
 
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} ${MN_ARCH_FLAGS} -O3")
@@ -21,7 +26,7 @@ set(GGML_OPENCL          OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(${LLAMA_DIR} llama_build)
 
-add_library(llama_jni SHARED llama_jni.cpp)
-target_link_libraries(llama_jni PRIVATE llama ggml-cpu android log)
-target_link_options(llama_jni PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections -s)
-set_target_properties(llama_jni PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)
+add_library(${MN_LIB_NAME} SHARED ${CMAKE_CURRENT_SOURCE_DIR}/llama_jni.cpp)
+target_link_libraries(${MN_LIB_NAME} PRIVATE llama ggml-cpu android log)
+target_link_options(${MN_LIB_NAME} PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections -s)
+set_target_properties(${MN_LIB_NAME} PROPERTIES C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden)

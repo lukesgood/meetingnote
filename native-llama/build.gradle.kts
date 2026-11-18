@@ -17,7 +17,7 @@ android {
                 arguments += listOf(
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DANDROID_STL=c++_shared",
-                    // 대상: Snapdragon 870 (Cortex-A77/A55, ARMv8.2 + dotprod + fp16)
+                    // 가속판: ARMv8.2 + dotprod + fp16 (Cortex-A55/A75 이후). 이전 세대 CPU는 :native-llama-base 사용
                     "-DMN_ARCH_FLAGS=-march=armv8.2-a+dotprod+fp16",
                 )
             }

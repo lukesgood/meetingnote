@@ -1,5 +1,7 @@
 package com.meetingnote.app.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -174,16 +176,17 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
             pendingCrash?.let { c ->
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("지난 실행에서 앱이 비정상 종료됐습니다", fontWeight = FontWeight.SemiBold)
-                                Text("${c.kind}. 오류 보고를 보내 주시면 개선에 도움이 됩니다.",
-                                    style = MaterialTheme.typography.bodySmall)
+                        // 버튼은 문구 아래 오른쪽 정렬 (휴대폰 폭에서도 문구가 찌그러지지 않게)
+                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            Text("지난 실행에서 앱이 비정상 종료됐습니다", fontWeight = FontWeight.SemiBold)
+                            Text("${c.kind}. 오류 보고를 보내 주시면 개선에 도움이 됩니다.",
+                                style = MaterialTheme.typography.bodySmall)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { ErrorReporter.markCrashSeen(); pendingCrash = null }) { Text("닫기") }
+                                Button(onClick = {
+                                    report = ReportRequest(crash = c); ErrorReporter.markCrashSeen(); pendingCrash = null
+                                }) { Text("보고하기") }
                             }
-                            TextButton(onClick = { ErrorReporter.markCrashSeen(); pendingCrash = null }) { Text("닫기") }
-                            Button(onClick = {
-                                report = ReportRequest(crash = c); ErrorReporter.markCrashSeen(); pendingCrash = null
-                            }) { Text("보고하기") }
                         }
                     }
                 }
@@ -193,10 +196,12 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
             }
             if (state.phase == Phase.ERROR) item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(state.message ?: "오류", Modifier.weight(1f))
-                        TextButton(onClick = { report = ReportRequest(engineError = state.message ?: "오류") }) { Text("오류 보고") }
-                        TextButton(onClick = { MeetingEngine.clearError() }) { Text("닫기") }
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text(state.message ?: "오류")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { report = ReportRequest(engineError = state.message ?: "오류") }) { Text("오류 보고") }
+                            TextButton(onClick = { MeetingEngine.clearError() }) { Text("닫기") }
+                        }
                     }
                 }
             }
@@ -215,23 +220,34 @@ fun HomeScreen(onRecord: () -> Unit, onOpen: (String) -> Unit, onOpenLive: () ->
             // 헤더: 통계 + 검색
             item(span = { GridItemSpan(maxLineSpan) }) {
                 val totalMin = meetings.sumOf { it.durationMs } / 60_000
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
+                val heading: @Composable () -> Unit = {
+                    Column {
                         Text("회의 기록", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(
                             "회의 ${meetings.size}개 · 총 " + (if (totalMin >= 60) "${totalMin / 60}시간 ${totalMin % 60}분" else "${totalMin}분") + " 녹음",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (meetings.isNotEmpty()) OutlinedTextField(
-                        query, { query = it },
-                        Modifier.widthIn(min = 200.dp, max = 420.dp),
+                }
+                val search: @Composable (Modifier) -> Unit = { m ->
+                    OutlinedTextField(
+                        query, { query = it }, m,
                         placeholder = { Text("제목·요약 검색") },
                         leadingIcon = { Icon(Icons.Default.Search, null) },
                         trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "지우기") } },
                         singleLine = true,
                         shape = RoundedCornerShape(28.dp),
                     )
+                }
+                // 넓으면 제목 옆에 검색창, 휴대폰처럼 좁으면 제목 아래 전체 폭으로
+                BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
+                    if (maxWidth >= 560.dp) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { heading() }
+                        if (meetings.isNotEmpty()) search(Modifier.widthIn(min = 200.dp, max = 420.dp))
+                    } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        heading()
+                        if (meetings.isNotEmpty()) search(Modifier.fillMaxWidth())
+                    }
                 }
             }
             if (meetings.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {

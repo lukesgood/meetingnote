@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -44,22 +46,26 @@ import com.meetingnote.app.TranscriptLine
  * 통역 모드 화면: 맨 위에 최신 문장의 번역을 큰 자막으로, 아래에 원문+번역 기록.
  * 글자 크기는 A−/A+로 조절하고 설정에 저장.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ColumnScope.InterpretPane(lines: List<TranscriptLine>, pending: Int) {
+fun ColumnScope.InterpretPane(lines: List<TranscriptLine>, pending: Int, compact: Boolean = false) {
     val settings = MeetingEngine.settings
     var size by remember { mutableIntStateOf(settings.captionSize) }
     fun setSize(v: Int) { size = v.coerceIn(20, 56); settings.captionSize = size }
     val scale = size / 30f
 
+    // 제목·배지는 좁으면 줄바꿈, 글자 크기 버튼은 항상 오른쪽에 보이게
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("실시간 통역", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.padding(start = 8.dp))
-        Badge(null, "한국어 ↔ English", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
-        if (pending > 0) {
-            Spacer(Modifier.padding(start = 6.dp))
-            Text("번역 대기 $pending", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(
+            Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("실시간 통역", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Badge(null, "한국어 ↔ English", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
+            if (pending > 0) Text("번역 대기 $pending", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.weight(1f))
         IconButton(onClick = { setSize(size - 4) }) { Icon(Icons.Default.TextDecrease, "글자 작게") }
         Text("${size}", style = MaterialTheme.typography.labelLarge)
         IconButton(onClick = { setSize(size + 4) }) { Icon(Icons.Default.TextIncrease, "글자 크게") }
@@ -68,11 +74,11 @@ fun ColumnScope.InterpretPane(lines: List<TranscriptLine>, pending: Int) {
     // 최신 자막: 번역이 있는 가장 최근 문장 (없으면 최근 원문)
     val latest = lines.lastOrNull { it.translation != null } ?: lines.lastOrNull()
     Card(
-        Modifier.fillMaxWidth().heightIn(min = (size * 4.2f).dp),
+        Modifier.fillMaxWidth().heightIn(min = (size * if (compact) 3f else 4.2f).dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
         AnimatedContent(latest, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "caption") { l ->
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(if (compact) 14.dp else 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (l == null) {
                     Text("말하면 이곳에 번역이 크게 표시됩니다.", fontSize = (size * 0.7f).sp,
                         color = MaterialTheme.colorScheme.onPrimaryContainer)

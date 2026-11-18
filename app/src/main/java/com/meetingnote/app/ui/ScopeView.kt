@@ -84,7 +84,12 @@ fun levelColor(l: VoiceLevel) = when (l) {
  * 형광 색: 녹색=양호, 주황=작음(자동 보정), 빨강=인식 어려움(무음 처리 기준 미만).
  */
 @Composable
-fun ScopeView(data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier, crtHeight: androidx.compose.ui.unit.Dp = 240.dp) {
+fun ScopeView(
+    data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier,
+    crtHeight: androidx.compose.ui.unit.Dp = 240.dp,
+    /** 휴대폰: 레벨 미터를 빼고 상태 한 줄만 (화면 높이를 녹취록에 양보) */
+    compact: Boolean = false,
+) {
     val level = data?.let { VoiceThreshold.classify(it.holdDb) } ?: VoiceLevel.UNCLEAR
     val phosphor by animateColorAsState(if (paused) PhosphorPaused else levelColor(level), tween(300), label = "phosphor")
     // 바늘: 실제 미터처럼 약간 출렁이며 따라가도록 스프링
@@ -172,7 +177,7 @@ fun ScopeView(data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier, 
         modifier
             .clip(RoundedCornerShape(14.dp))
             .background(Brush.verticalGradient(listOf(PanelLight, PanelDark)))
-            .padding(14.dp)
+            .padding(if (compact) 8.dp else 14.dp)
     ) {
         if (maxWidth >= 620.dp) {
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -197,9 +202,26 @@ fun ScopeView(data: ScopeData?, paused: Boolean, modifier: Modifier = Modifier, 
                     }
                 }
             }
+        } else if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                crt(Modifier.fillMaxWidth(), crtHeight)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Canvas(Modifier.size(16.dp)) { drawLamp(phosphor) }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        when {
+                            paused -> "일시정지"
+                            level == VoiceLevel.GOOD -> "음성 양호"
+                            level == VoiceLevel.LOW -> "소리가 작음 · 가까이서 말하세요"
+                            else -> "음성 감지 안 됨"
+                        },
+                        color = Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1,
+                    )
+                }
+            }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                crt(Modifier.fillMaxWidth(), 180.dp)
+                crt(Modifier.fillMaxWidth(), crtHeight.coerceAtMost(180.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     meter(Modifier.width(170.dp).height(110.dp))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { status() }

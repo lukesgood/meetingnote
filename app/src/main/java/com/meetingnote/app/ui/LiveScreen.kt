@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -81,125 +82,146 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로") } },
         )
     }) { pad ->
-        // 상태(타이머·오실로스코프·버튼)
-        var wideLayout = false
-        val statusCard: @Composable () -> Unit = {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (s.phase == Phase.SUMMARIZING) SummaryProgressCard(s.summary)
-                    else Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(formatTime(s.elapsedMs), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(16.dp))
-                        if (s.busy && s.phase != Phase.RECORDING) {
-                            CircularProgressIndicator(Modifier.size(28.dp))
-                            Spacer(Modifier.width(12.dp))
-                            Text(s.message ?: s.summaryStage, Modifier.weight(1f))
+        // 반응형 기준
+        //  wide: 태블릿 가로(840dp+) 또는 가로로 돌린 휴대폰 → 좌(상태) | 우(녹취록) 2단
+        //  narrow: 휴대폰 세로 → 위(상태, 최대 화면 절반·스크롤) / 녹취록 / 하단 고정 버튼
+        //  compact: 휴대폰 폭(480dp 미만) — 오실로스코프를 줄이고 버튼 문구를 짧게
+        BoxWithConstraints(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
+            val wideLayout = maxWidth >= 840.dp || (maxWidth > maxHeight && maxWidth >= 560.dp)
+            val compact = maxWidth < 480.dp || maxHeight < 560.dp
+            val shortScreen = maxHeight < 560.dp
+
+            // 상태(타이머·진행률·오실로스코프). 버튼은 controls로 분리해 항상 보이게 함
+            val statusCard: @Composable () -> Unit = {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(if (compact) 12.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (s.phase == Phase.SUMMARIZING) SummaryProgressCard(s.summary)
+                        else Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(formatTime(s.elapsedMs),
+                                style = if (compact) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.displaySmall,
+                                fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(16.dp))
+                            if (s.busy && s.phase != Phase.RECORDING) {
+                                CircularProgressIndicator(Modifier.size(28.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Text(s.message ?: s.summaryStage, Modifier.weight(1f))
+                            }
                         }
-                    }
-                    s.refineFraction?.let { f ->
-                        val anim by androidx.compose.animation.core.animateFloatAsState(f, label = "refine")
-                        androidx.compose.material3.LinearProgressIndicator(progress = { anim }, modifier = Modifier.fillMaxWidth())
-                        Text(
-                            "정밀 모델(large-v3-turbo)로 녹음 전체를 다시 인식해 녹취록 정확도를 높이는 중입니다." +
-                                (s.refineEtaSec?.let { e -> " 남은 시간 약 ${if (e < 60) "${e}초" else "${e / 60}분"}" } ?: ""),
+                        s.refineFraction?.let { f ->
+                            val anim by androidx.compose.animation.core.animateFloatAsState(f, label = "refine")
+                            androidx.compose.material3.LinearProgressIndicator(progress = { anim }, modifier = Modifier.fillMaxWidth())
+                            Text(
+                                "정밀 모델(large-v3-turbo)로 녹음 전체를 다시 인식해 녹취록 정확도를 높이는 중입니다." +
+                                    (s.refineEtaSec?.let { e -> " 남은 시간 약 ${if (e < 60) "${e}초" else "${e / 60}분"}" } ?: ""),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (s.phase == Phase.RECORDING) {
+                            val scope by MeetingEngine.scopeData.collectAsState()
+                            ScopeView(scope, paused, Modifier.fillMaxWidth(),
+                                crtHeight = when {
+                                    shortScreen -> 90.dp
+                                    s.interpreting -> if (compact) 90.dp else 170.dp
+                                    wideLayout -> 400.dp
+                                    compact -> 120.dp
+                                    else -> 240.dp
+                                },
+                                compact = compact)
+                        }
+                        val rtf = s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중"
+                        if (s.phase != Phase.SUMMARIZING) Text(
+                            "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개" +
+                                (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        if (s.phase == Phase.ERROR) {
+                            Text(s.message ?: "", color = MaterialTheme.colorScheme.error)
+                            var reporting by remember { mutableStateOf(false) }
+                            OutlinedButton(onClick = { reporting = true }) { Text("오류 보고") }
+                            if (reporting) ErrorReportDialog(engineError = s.message ?: "오류", onDismiss = { reporting = false })
+                        }
                     }
-                    if (s.phase == Phase.RECORDING) {
-                        val scope by MeetingEngine.scopeData.collectAsState()
-                        ScopeView(scope, paused, Modifier.fillMaxWidth(),
-                            crtHeight = when { s.interpreting -> 170.dp; wideLayout -> 400.dp; else -> 240.dp })
+                }
+            }
+            // 녹음 제어 버튼: 어떤 화면 크기에서도 잘리지 않도록 스크롤 영역 밖에 고정
+            val controls: @Composable () -> Unit = {
+                if (s.phase == Phase.RECORDING) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = { paused = !paused; MeetingEngine.setPaused(paused) }) {
+                        Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
+                        Text(if (paused) " 계속" else " 일시정지", maxLines = 1)
                     }
-                    val rtf = s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중"
-                    if (s.phase != Phase.SUMMARIZING) Text(
-                        "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개" +
-                            (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
-                        style = MaterialTheme.typography.bodySmall,
+                    Button(
+                        onClick = { MeetingEngine.stopRecording(autoSummarize = true) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    ) {
+                        Icon(Icons.Default.Stop, null)
+                        Text(if (compact) " 회의 종료" else " 종료하고 회의록 만들기", maxLines = 1)
+                    }
+                }
+                if (s.phase == Phase.SUMMARIZING) OutlinedButton(onClick = { MeetingEngine.cancel() }) { Text("요약 중단") }
+            }
+            // 녹취록 또는 생성 중인 회의록
+            val contentPane: @Composable ColumnScope.() -> Unit = {
+                if (s.phase == Phase.SUMMARIZING) {
+                    val su = s.summary
+                    val reading = s.summaryText.isEmpty() && su?.writing != true
+                    Text(
+                        when {
+                            su == null || su.phase == 0 -> "요약 모델 준비 중"
+                            reading -> if (su.readLines != null) "녹취록 읽는 중" else "구간 메모 모아 읽는 중"
+                            su.phase == 2 -> "회의록 쓰는 중"
+                            su.phase == 3 -> "회의록 완성 · 제목 정하는 중"
+                            else -> "구간 메모 정리 중"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
                     )
-                    if (s.phase == Phase.ERROR) {
-                        Text(s.message ?: "", color = MaterialTheme.colorScheme.error)
-                        var reporting by remember { mutableStateOf(false) }
-                        OutlinedButton(onClick = { reporting = true }) { Text("오류 보고") }
-                        if (reporting) ErrorReportDialog(engineError = s.message ?: "오류", onDismiss = { reporting = false })
+                    Card(Modifier.fillMaxWidth().weight(1f)) {
+                        if (reading) ReadingView(s.lines, su, Modifier.fillMaxWidth())
+                        else {
+                            val scroll = rememberScrollState()
+                            LaunchedEffect(s.summaryText.length) { scroll.animateScrollTo(scroll.maxValue) }
+                            val cursor = if (su?.writing == true) rememberCursor() else ""
+                            Column(Modifier.padding(16.dp).verticalScroll(scroll)) {
+                                MarkdownText(s.summaryText + cursor)
+                            }
+                        }
                     }
+                } else if (s.interpreting) {
+                    InterpretPane(s.lines, s.translatePending, compact = compact)
+                } else {
+                    Text("실시간 녹취록", style = MaterialTheme.typography.titleMedium)
+                    val listState = rememberLazyListState()
+                    LaunchedEffect(s.lines.size) { if (s.lines.isNotEmpty()) listState.animateScrollToItem(s.lines.size - 1) }
+                    Card(Modifier.fillMaxWidth().weight(1f)) {
+                        LazyColumn(state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(if (compact) 12.dp else 16.dp)) {
+                            if (s.lines.isEmpty()) item {
+                                Text("말하기 시작하면 문장이 끝날 때마다(보통 5~15초) 텍스트가 나타납니다.", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            items(s.lines) { l ->
+                                TranscriptRow(l, showTranslation = s.interpreting)
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                }
+            }
 
-                    if (s.phase == Phase.RECORDING) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = { paused = !paused; MeetingEngine.setPaused(paused) }) {
-                            Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, null)
-                            Text(if (paused) " 계속" else " 일시정지")
-                        }
-                        Button(
-                            onClick = { MeetingEngine.stopRecording(autoSummarize = true) },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        ) {
-                            Icon(Icons.Default.Stop, null); Text(" 종료하고 회의록 만들기")
-                        }
-                    }
-                    if (s.phase == Phase.SUMMARIZING) OutlinedButton(onClick = { MeetingEngine.cancel() }) { Text("요약 중단") }
-                }
-            }
-        }
-        // 녹취록 또는 생성 중인 회의록
-        val contentPane: @Composable ColumnScope.() -> Unit = {
-            if (s.phase == Phase.SUMMARIZING) {
-                val su = s.summary
-                val reading = s.summaryText.isEmpty() && su?.writing != true
-                Text(
-                    when {
-                        su == null || su.phase == 0 -> "요약 모델 준비 중"
-                        reading -> if (su.readLines != null) "녹취록 읽는 중" else "구간 메모 모아 읽는 중"
-                        su.phase == 2 -> "회의록 쓰는 중"
-                        su.phase == 3 -> "회의록 완성 · 제목 정하는 중"
-                        else -> "구간 메모 정리 중"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Card(Modifier.fillMaxWidth().weight(1f)) {
-                    if (reading) ReadingView(s.lines, su, Modifier.fillMaxWidth())
-                    else {
-                        val scroll = rememberScrollState()
-                        LaunchedEffect(s.summaryText.length) { scroll.animateScrollTo(scroll.maxValue) }
-                        val cursor = if (su?.writing == true) rememberCursor() else ""
-                        Column(Modifier.padding(16.dp).verticalScroll(scroll)) {
-                            MarkdownText(s.summaryText + cursor)
-                        }
-                    }
-                }
-            } else if (s.interpreting) {
-                InterpretPane(s.lines, s.translatePending)
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (s.interpreting) "실시간 녹취 · 통역" else "실시간 녹취록", style = MaterialTheme.typography.titleMedium)
-                    if (s.interpreting) Badge(null, "한국어 ↔ English", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-                val listState = rememberLazyListState()
-                LaunchedEffect(s.lines.size) { if (s.lines.isNotEmpty()) listState.animateScrollToItem(s.lines.size - 1) }
-                Card(Modifier.fillMaxWidth().weight(1f)) {
-                    LazyColumn(state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
-                        if (s.lines.isEmpty()) item {
-                            Text("말하기 시작하면 문장이 끝날 때마다(보통 5~15초) 텍스트가 나타납니다.", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        items(s.lines) { l ->
-                            TranscriptRow(l, showTranslation = s.interpreting)
-                            HorizontalDivider()
-                        }
-                    }
-                }
-            }
-        }
-        // 반응형: 가로로 넓으면(태블릿 가로) 좌우 2단, 좁으면(휴대폰·세로) 위아래
-        BoxWithConstraints(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
-            wideLayout = maxWidth >= 840.dp
             if (wideLayout) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     // 통역 중에는 자막 영역을 넓게 (상태 1 : 통역 1.8)
-                    Column(Modifier.weight(if (s.interpreting) 1f else 1.3f).fillMaxHeight().verticalScroll(rememberScrollState())) { statusCard() }
-                    Column(Modifier.weight(if (s.interpreting) 1.8f else 1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) { contentPane() }
+                    Column(Modifier.weight(if (s.interpreting) 1f else 1.3f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) { statusCard() }
+                        controls()
+                    }
+                    Column(Modifier.weight(if (s.interpreting) 1.8f else 1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)) { contentPane() }
                 }
             } else {
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    statusCard()
+                val statusMax = maxHeight * (if (s.phase == Phase.SUMMARIZING) 0.5f else 0.45f)
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)) {
+                    Column(Modifier.heightIn(max = statusMax).verticalScroll(rememberScrollState())) { statusCard() }
                     contentPane()
+                    controls()
                 }
             }
         }

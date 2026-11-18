@@ -71,9 +71,46 @@ class LlamaModel private constructor(private var handle: Long) : AutoCloseable {
     }
 }
 
+/**
+ * CPU 세대에 맞는 엔진 선택.
+ * - "dp": ARMv8.2 dotprod+fp16 가속판 (llama_jni) — Cortex-A55/A75 이후 (Snapdragon 845+, Helio G70+/P90, Dimensity 전 기종 등)
+ * - "base": ARMv8.0 기본판 (llama_jni_base) — Cortex-A53/A73 (Helio P22/P35/P60/P70/G35/G37, Snapdragon 66x/68x, Exynos 9611 등)
+ * 가속판을 지원하지 않는 CPU에서 가속판을 쓰면 첫 연산에서 SIGILL로 앱이 종료되므로 반드시 확인 후 불러온다.
+ * 테스트용으로 시스템 속성 meetingnote.cpu=base|dp 로 강제할 수 있다 (라이브러리를 불러오기 전에 설정).
+ */
+object LlamaNative {
+    val cpuFeatures: Set<String> by lazy {
+        runCatching {
+            java.io.File("/proc/cpuinfo").readLines().firstOrNull { it.startsWith("Features") }
+                ?.substringAfter(':')?.trim()?.split(Regex("\\s+"))?.toSet()
+        }.getOrNull() ?: emptySet()
+    }
+    val supportsAccelerated: Boolean get() = "asimddp" in cpuFeatures && "asimdhp" in cpuFeatures
+
+    /** 실제로 불러온 엔진 ("dp" | "base"), 아직 안 불렀으면 null */
+    @Volatile var loaded: String? = null
+        private set
+
+    @Synchronized internal fun load() {
+        if (loaded != null) return
+        val forced = System.getProperty("meetingnote.cpu")
+        val want = when (forced) {
+            "base" -> "base"
+            "dp" -> if (supportsAccelerated) "dp" else "base"   // 지원하지 않으면 강제 설정도 무시 (종료 방지)
+            else -> if (supportsAccelerated) "dp" else "base"
+        }
+        loaded = try {
+            System.loadLibrary(if (want == "dp") "llama_jni" else "llama_jni_base"); want
+        } catch (e: UnsatisfiedLinkError) {
+            if (want == "base") throw e
+            System.loadLibrary("llama_jni_base"); "base"
+        }
+    }
+}
+
 internal object LlamaLib {
     init {
-        System.loadLibrary("llama_jni")
+        LlamaNative.load()
     }
 
     external fun nativeLoad(path: String, nCtx: Int, threads: Int): Long

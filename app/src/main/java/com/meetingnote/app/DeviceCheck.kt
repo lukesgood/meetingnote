@@ -1,5 +1,6 @@
 package com.meetingnote.app
 
+import com.meetingnote.whisper.WhisperNative
 import android.app.ActivityManager
 import android.content.Context
 import org.json.JSONObject
@@ -84,11 +85,13 @@ object DeviceCheck {
             else -> Item("저장 공간", Level.NO, "남은 공간 ${gb(free)} — 필요한 모델 ${gb(need)}를 받을 공간이 부족합니다.")
         }
         val cores = DeviceInfo.bigCores
-        val cpuText = "${DeviceInfo.chipName} · 고성능 코어 ${cores}개" + if (hasDotprod) "" else " · 가속 명령어(dotprod) 없음"
+        val accel = WhisperNative.supportsAccelerated
+        val cpuText = "${DeviceInfo.chipName} · 고성능 코어 ${cores}개" + if (accel) "" else " · 가속 명령어 없음(기본 엔진)"
         val cpu = when {
-            cores >= 4 && hasDotprod -> Item("프로세서", Level.OK, cpuText)
-            cores >= 2 && hasDotprod -> Item("프로세서", Level.SLOW, "$cpuText — 처리 시간이 길어질 수 있습니다.")
-            else -> Item("프로세서", Level.SLOW, "$cpuText — 회의록 작성이 매우 느릴 수 있습니다.")
+            cores >= 4 && accel -> Item("프로세서", Level.OK, cpuText)
+            cores >= 2 && accel -> Item("프로세서", Level.SLOW, "$cpuText — 처리 시간이 길어질 수 있습니다.")
+            else -> Item("프로세서", Level.SLOW,
+                "$cpuText — 이전 세대 CPU라 기본 엔진으로 동작합니다. 실시간 녹취가 밀리거나 회의록 작성이 매우 느릴 수 있으니 '성능 점검'으로 확인하세요.")
         }
         return listOf(ram, storage, cpu)
     }
@@ -193,7 +196,8 @@ object DeviceCheck {
     /** 오류 보고용 한 줄 요약 */
     fun summaryLine(): String {
         val b = bench
-        val dot = if (hasDotprod) "dotprod" else "no-dotprod"
+        val dot = (if (hasDotprod) "dotprod" else "no-dotprod") +
+            " · 엔진 ${WhisperNative.loaded ?: (if (WhisperNative.supportsAccelerated) "dp" else "base")}"
         val i8 = if (hasI8mm) " i8mm" else ""
         val bt = b?.let { x ->
             " · 실측(스레드 ${x.threads}): STT ${x.sttRtf?.let { "%.2f".format(it) } ?: "-"}x, " +

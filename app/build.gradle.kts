@@ -38,6 +38,8 @@ kotlin { jvmToolchain(17) }
 dependencies {
     implementation(project(":native-whisper"))
     implementation(project(":native-llama"))
+    runtimeOnly(project(":native-whisper-base"))
+    runtimeOnly(project(":native-llama-base"))
 
     val composeBom = platform("androidx.compose:compose-bom:2025.06.01")
     implementation(composeBom)

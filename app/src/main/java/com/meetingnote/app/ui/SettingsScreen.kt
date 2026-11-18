@@ -1,5 +1,7 @@
 package com.meetingnote.app.ui
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
@@ -224,37 +226,43 @@ private fun ModelOption(
     val ready = remember(tick, spec) { store.isReady(spec) }
     val progress = remember(tick, spec) { store.progress(spec) }
     val rowMod = if (selected != null) Modifier.selectable(selected, onClick = onSelect) else Modifier
-    Column(rowMod.fillMaxWidth().padding(vertical = 2.dp)) {
+    // 오른쪽 상태(받음/진행률/받기). 휴대폰처럼 좁으면 이름 아래 줄로 내려 이름·설명 칸이 찌그러지지 않게
+    val status: @Composable () -> Unit = {
+        when {
+            ready -> {
+                AssistChip(
+                    onClick = {}, enabled = false,
+                    label = { Text("받음 · ${mb(spec.sizeBytes)}") },
+                    colors = AssistChipDefaults.assistChipColors(disabledLabelColor = MaterialTheme.colorScheme.primary),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                )
+                // 선택 가능한 모델 중 사용하지 않는 것만 삭제 가능 (필수 모델·사용 중·처리 중에는 불가)
+                val canDelete = selected == false && !busy
+                IconButton(onClick = onDelete, enabled = canDelete) {
+                    Icon(Icons.Default.DeleteOutline, if (canDelete) "삭제" else "사용 중이라 삭제 불가")
+                }
+            }
+            progress != null -> {
+                Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelLarge)
+                IconButton(onClick = { store.cancel(spec) }) { Icon(Icons.Default.Close, "다운로드 취소") }
+            }
+            else -> OutlinedButton(onClick = { store.download(spec) }) {
+                Icon(Icons.Default.Download, null, Modifier.size(18.dp)); Text(" 받기 · ${mb(spec.sizeBytes)}")
+            }
+        }
+    }
+    BoxWithConstraints(rowMod.fillMaxWidth()) {
+    val narrow = maxWidth < 440.dp   // 들여쓰기 한 단계 생략 (BoxWithConstraints 래퍼)
+    Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (selected != null) RadioButton(selected, onClick = onSelect) else Spacer(Modifier.width(48.dp))
+            if (selected != null) RadioButton(selected, onClick = onSelect) else Spacer(Modifier.width(if (narrow) 0.dp else 48.dp))
             Column(Modifier.weight(1f)) {
                 Text(spec.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 Text(spec.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Spacer(Modifier.width(8.dp))
-            when {
-                ready -> {
-                    AssistChip(
-                        onClick = {}, enabled = false,
-                        label = { Text("받음 · ${mb(spec.sizeBytes)}") },
-                        colors = AssistChipDefaults.assistChipColors(disabledLabelColor = MaterialTheme.colorScheme.primary),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                    )
-                    // 선택 가능한 모델 중 사용하지 않는 것만 삭제 가능 (필수 모델·사용 중·처리 중에는 불가)
-                    val canDelete = selected == false && !busy
-                    IconButton(onClick = onDelete, enabled = canDelete) {
-                        Icon(Icons.Default.DeleteOutline, if (canDelete) "삭제" else "사용 중이라 삭제 불가")
-                    }
-                }
-                progress != null -> {
-                    Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelLarge)
-                    IconButton(onClick = { store.cancel(spec) }) { Icon(Icons.Default.Close, "다운로드 취소") }
-                }
-                else -> OutlinedButton(onClick = { store.download(spec) }) {
-                    Icon(Icons.Default.Download, null, Modifier.size(18.dp)); Text(" 받기 · ${mb(spec.sizeBytes)}")
-                }
-            }
+            if (!narrow) { Spacer(Modifier.width(8.dp)); status() }
         }
+        if (narrow) Row(Modifier.padding(start = if (selected != null) 48.dp else 0.dp), verticalAlignment = Alignment.CenterVertically) { status() }
         if (!ready && progress != null) {
             LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().padding(start = 48.dp, top = 4.dp))
         }
@@ -263,6 +271,7 @@ private fun ModelOption(
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(start = 48.dp))
         }
+    }
     }
 }
 
@@ -383,6 +392,7 @@ private fun UsageRow(label: String, bytes: Long) = Row {
     Text(if (bytes >= 1_000_000_000) "%.1fGB".format(bytes / 1e9) else mb(bytes), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AboutCard(onReport: () -> Unit) {
     val ctx = LocalContext.current
@@ -391,7 +401,7 @@ private fun AboutCard(onReport: () -> Unit) {
     fun open(url: String) = ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     SectionCard(Icons.Default.Info, "정보 및 지원", "회의노트 v$version") {
         Hint("녹음·녹취록·회의록은 기기 밖으로 전송되지 않습니다. 인터넷은 모델을 받을 때와 오류 보고를 열 때만 씁니다.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onReport) { Icon(Icons.Default.BugReport, null, Modifier.size(18.dp)); Text(" 오류 보고") }
             OutlinedButton(onClick = { open("https://github.com/${ErrorReporter.REPO}") }) {
                 Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(18.dp)); Text(" GitHub")
