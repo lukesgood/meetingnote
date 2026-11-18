@@ -3,6 +3,9 @@ package com.meetingnote.app
 import com.meetingnote.llama.GenerationStats
 import com.meetingnote.llama.LlamaModel
 
+/** 사용자가 회의록 작성을 중단함 (오류가 아님) */
+class SummaryCancelled : Exception("회의록 작성을 중단했습니다")
+
 /**
  * 온디바이스 LLM 회의록 생성.
  *
@@ -167,7 +170,10 @@ class Summarizer(
         return out to stats
     }
 
-    fun cancel() = llm.cancel()
+    @Volatile private var cancelled = false
+
+    /** 중단 요청: 진행 중인 단계를 멈추고 남은 단계(구간 요약·종합)도 시작하지 않는다 */
+    fun cancel() { cancelled = true; llm.cancel() }
 
     /** 회의록의 '회의 요약' 부분으로 짧은 제목 생성 (프롬프트를 짧게 유지해 수 초 내 완료) */
     fun makeTitle(minutes: String): String? {
@@ -189,18 +195,26 @@ class Summarizer(
         user: String, maxTokens: Int, stats: MutableList<GenerationStats>, onText: (String) -> Unit,
         step: SummaryTracker.Step? = null,
     ): String {
+        // 네이티브의 중단 플래그는 다음 호출에서 초기화되므로(중단해도 다음 구간이 이어서 실행됨) 여기서 직접 확인
+        if (cancelled) throw SummaryCancelled()
         val prompt = llm.formatChat(null, user, spec.assistantPrefix)
         step?.let { tracker.begin(it, llm.countTokens(prompt)) }
         val sb = StringBuilder()
-        val st = llm.generate(
-            prompt, maxTokens = maxTokens, temperature = 0.2f, repeatPenalty = 1.05f,
-            onPrompt = if (step != null) { d, t -> tracker.onPrompt(d, t) } else null,
-        ) {
-            if (step != null) tracker.onToken()
-            sb.append(it)
-            onText(stripThink(sb.toString()))
-            true
+        val st = try {
+            llm.generate(
+                prompt, maxTokens = maxTokens, temperature = 0.2f, repeatPenalty = 1.05f,
+                onPrompt = if (step != null) { d, t -> tracker.onPrompt(d, t) } else null,
+            ) {
+                if (step != null) tracker.onToken()
+                sb.append(it)
+                onText(stripThink(sb.toString()))
+                !cancelled
+            }
+        } catch (e: IllegalStateException) {
+            if (cancelled) throw SummaryCancelled() else throw e
         }
+        // 생성 도중 멈추면 잘린 글이 정상 결과처럼 돌아오므로 완성본으로 쓰지 않는다
+        if (cancelled) throw SummaryCancelled()
         if (step != null) tracker.end(st)
         stats += st
         return stripThink(sb.toString()).trim()

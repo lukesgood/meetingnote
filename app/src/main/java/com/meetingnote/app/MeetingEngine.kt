@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -69,8 +70,14 @@ object MeetingEngine {
 
     /** 오실로스코프 TIME/DIV 변경 (녹음 중 즉시 반영, 설정에 저장) */
     fun setScopeTimeDiv(i: Int) { settings.scopeTimeDiv = i; scopeAnalyzer.timeDivIndex = i }
-    /** 추론 전용 스레드 (빅코어 4개를 ggml 스레드풀이 사용) */
-    private val inference = Dispatchers.Default.limitedParallelism(1)
+    /**
+     * 추론 전용 스레드 하나 (빅코어 4개를 ggml 스레드풀이 사용).
+     * 네이티브 쪽에서 호출 스레드를 빅코어에 고정(sched_setaffinity)하므로, 공용 풀(Dispatchers.Default)의
+     * 스레드를 빌려 쓰면 고정이 풀리지 않은 채 다른 코루틴으로 돌아가 UI·번역 작업까지 빅코어에 몰린다.
+     */
+    private val inference = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(null, r, "inference", 8L shl 20).apply { isDaemon = true }
+    }.asCoroutineDispatcher()
 
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state
@@ -152,7 +159,8 @@ object MeetingEngine {
                         val t0 = System.currentTimeMillis()
                         w.transcribe(pcm.copyOf(), threads = settings.threads, language = "ko", beamSize = 5,
                             vadModelPath = models.file(ModelCatalog.VAD).path,
-                            audioCtx = if (settings.trimEncoder) audioCtx else 0)
+                            audioCtx = if (settings.trimEncoder) audioCtx else 0,
+                            temperatureInc = LIVE_TEMPERATURE_INC)   // 실시간 인식과 같은 조건으로 측정
                         best = minOf(best, System.currentTimeMillis() - t0)
                     }
                     rtf = best / (pcm.size * 1000.0 / AudioRecorder.SAMPLE_RATE)
@@ -324,14 +332,29 @@ object MeetingEngine {
             repo.saveTranscript(id, lines)
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
             releaseWhisper()
+            val refine = shouldRefine(lines)
+            // 회의록 먼저 보기: 정밀 인식을 기다리지 않고 실시간 녹취록으로 먼저 작성하고, 정밀 인식 뒤 다시 작성
+            val quick = refine && autoSummarize && settings.quickMinutes && lines.isNotEmpty() && models.isReady(settings.llm)
+            // 먼저 만드는 회의록이 실패하거나 중단돼도 정밀 인식은 계속한다 (녹취록 정확도가 더 중요)
+            val first = if (quick) summarizeInternal(id, finish = false) else SummaryResult.FAILED
+            var refined = false
             try {
-                if (shouldRefine(lines)) refineInternal(id)
+                if (refine) refined = refineInternal(id)
             } catch (e: Throwable) {
                 // 정밀 인식이 실패해도 실시간 녹취록으로 회의록은 만든다
                 Log.e(TAG, "refine failed", e); ErrorReporter.recordError(e)
+                runCatching { releaseWhisper() }
+                _state.update { it.copy(refineFraction = null, refineEtaSec = null, message = null) }
             }
             val finalLines = _state.value.lines
-            if (autoSummarize && finalLines.isNotEmpty()) summarizeInternal(id) else { releaseSharedLlm(); finishIdle() }
+            when {
+                // 사용자가 요약을 중단했으면 정밀 인식 뒤에도 다시 쓰지 않음
+                first == SummaryResult.CANCELLED -> { releaseSharedLlm(); finishIdle() }
+                // 녹취록이 그대로면 먼저 만든 회의록 유지
+                first == SummaryResult.DONE && !refined -> { releaseSharedLlm(); finishIdle() }
+                autoSummarize && finalLines.isNotEmpty() -> summarizeInternal(id)
+                else -> { releaseSharedLlm(); finishIdle() }
+            }
         }
     }
 
@@ -433,11 +456,12 @@ object MeetingEngine {
      * 작은 목소리·숫자·직함 오인식과 환각 반복이 크게 줄었다 (2026-11-17 실제 회의 녹음 비교).
      * 원래 실시간 녹취록은 transcript_live.json으로 보관.
      */
-    private suspend fun refineInternal(id: String) = withContext(inference) {
+    /** @return 녹취록을 정밀 인식 결과로 바꿨는지 */
+    private suspend fun refineInternal(id: String): Boolean = withContext(inference) {
         val spec = ModelCatalog.REFINER
         val audio = repo.audioFile(id)
         val total = wavSampleCount(audio)
-        if (total < AudioRecorder.SAMPLE_RATE) return@withContext
+        if (total < AudioRecorder.SAMPLE_RATE) return@withContext false
         val sr = AudioRecorder.SAMPLE_RATE
         _state.update { it.copy(phase = Phase.REFINING, message = "정밀 인식 모델 불러오는 중…", refineFraction = 0f, refineEtaSec = null) }
         ErrorReporter.trail("정밀 인식 시작: ${total / sr}초")
@@ -450,7 +474,7 @@ object MeetingEngine {
         var len = 0
         var offset = 0L
         val out = ArrayList<TranscriptLine>()
-        val recent = ArrayDeque<String>()
+        var lastKey = ""
         val t0 = System.currentTimeMillis()
 
         fun progress(done: Double) {
@@ -463,17 +487,24 @@ object MeetingEngine {
 
         fun process(n: Int) {
             val pcm = FloatArray(n) { buf[it] / 32768f }
+            // 작은 목소리 보정: 실시간 인식과 같은 원리를 블록 단위로 적용 (VAD가 작은 말소리를 버리지 않도록)
+            val gain = Loudness.blockGain(pcm, sr)
+            if (gain > 1.05f) for (k in pcm.indices) pcm[k] = (pcm[k] * gain).coerceIn(-1f, 1f)
             val base = offset
             val r = w.transcribe(pcm, threads = settings.threads, language = "ko", beamSize = 5,
                 initialPrompt = vocab, vadModelPath = models.file(ModelCatalog.VAD).path,
-                noContext = true, onProgress = { pct -> progress(base + n * pct / 100.0) })
+                noContext = true, carryInitialPrompt = settings.refineVocabulary,
+                vadThreshold = REFINE_VAD_THRESHOLD, vadPadMs = REFINE_VAD_PAD_MS,
+                onProgress = { pct -> progress(base + n * pct / 100.0) })
             val offMs = base * 1000 / sr
             for (seg in r.segments) {
                 val text = Repetition.collapse(seg.text)
                 val key = Repetition.normalize(text)
-                if (Hallucination.isLikely(text) || (key.length >= 2 && key in recent)) continue
+                // 앞 구간 문맥을 넘기지 않아 '베끼기' 반복 위험이 낮으므로 바로 앞 문장과 같을 때만 제거
+                // (최근 5문장 비교는 "맞습니다" 같은 정상적인 반복 대답까지 지움)
+                if (Hallucination.isLikely(text, seg.noSpeechProb, seg.avgProb) || (key.length >= 2 && key == lastKey)) continue
                 out += TranscriptLine(offMs + seg.startMs, offMs + seg.endMs, text, lang = "ko")
-                if (key.length >= 2) { recent.addLast(key); while (recent.size > 5) recent.removeFirst() }
+                if (key.length >= 2) lastKey = key
             }
             System.arraycopy(buf, n, buf, 0, len - n)
             len -= n; offset += n
@@ -512,6 +543,7 @@ object MeetingEngine {
         Log.i(TAG, "refine done: ${total / sr}s audio in ${sec}s, ${out.size} lines")
         ErrorReporter.trail("정밀 인식 완료: ${sec}초, ${out.size}문장")
         _state.update { it.copy(refineFraction = null, refineEtaSec = null, message = null) }
+        out.isNotEmpty()
     }
 
     // ---------------------------------------------------------------- 요약
@@ -527,11 +559,16 @@ object MeetingEngine {
         summarizer?.cancel()
     }
 
-    private suspend fun summarizeInternal(id: String) = withContext(inference) {
+    /**
+     * @param finish 끝나면 대기 상태로 돌아갈지 (회의록 먼저 보기에서는 뒤에 정밀 인식이 이어지므로 false)
+     *   false면 오류·중단 시에도 대기·오류 상태로 바꾸지 않고, 쓰다 만 글을 화면에서 지운다
+     * @return 회의록을 끝까지 작성해 저장했는지, 중단했는지, 실패했는지
+     */
+    private suspend fun summarizeInternal(id: String, finish: Boolean = true): SummaryResult = withContext(inference) {
         val spec = settings.llm
         if (!models.isReady(spec)) {
-            _state.update { it.copy(phase = Phase.ERROR, message = "요약 모델이 없습니다: ${spec.title}") }
-            return@withContext
+            if (finish) _state.update { it.copy(phase = Phase.ERROR, message = "요약 모델이 없습니다: ${spec.title}") }
+            return@withContext SummaryResult.FAILED
         }
         val t0 = System.currentTimeMillis()
         _state.update { it.copy(phase = Phase.SUMMARIZING, summaryText = "", summaryStage = "요약 모델 불러오는 중…", message = null,
@@ -579,9 +616,21 @@ object MeetingEngine {
             }
             meeting?.let { repo.save(it) }
             Log.i(TAG, "summary done: $statText")
-            finishIdle()
+            if (finish) finishIdle()
+            SummaryResult.DONE
+        } catch (e: SummaryCancelled) {
+            // 사용자가 중단: 쓰다 만 회의록을 완성본처럼 저장하지 않고, 오류로도 기록하지 않음
+            ErrorReporter.trail("요약 중단")
+            if (finish) finishIdle() else _state.update { it.copy(summaryText = "") }
+            SummaryResult.CANCELLED
         } catch (e: Throwable) {
-            fail(e)
+            if (finish) fail(e)
+            else {
+                // 뒤에 정밀 인식이 이어지므로 오류 화면으로 바꾸지 않고 기록만 남김
+                Log.e(TAG, "quick summary failed", e); ErrorReporter.recordError(e)
+                _state.update { it.copy(summaryText = "") }
+            }
+            SummaryResult.FAILED
         } finally {
             ticker.cancel()
             summarizer = null
@@ -595,6 +644,8 @@ object MeetingEngine {
     private fun releaseWhisper() {
         whisper?.close(); whisper = null; whisperSpec = null
     }
+
+    private enum class SummaryResult { DONE, CANCELLED, FAILED }
 
     private fun finishIdle() {
         _state.update { it.copy(phase = Phase.IDLE, message = null) }
@@ -652,6 +703,14 @@ class Settings(context: Context) {
     var refine: Boolean
         get() = prefs.getBoolean("refine", true)
         set(v) = prefs.edit().putBoolean("refine", v).apply()
+    /** 정밀 인식에도 용어 사전을 인식 힌트로 적용 (실험: 문장이 길게 뭉칠 수 있어 기본은 끔) */
+    var refineVocabulary: Boolean
+        get() = prefs.getBoolean("refine_vocabulary", false)
+        set(v) = prefs.edit().putBoolean("refine_vocabulary", v).apply()
+    /** 회의록 먼저 보기: 정밀 인식 전에 실시간 녹취록으로 회의록을 먼저 만들고, 정밀 인식 뒤 다시 작성 */
+    var quickMinutes: Boolean
+        get() = prefs.getBoolean("quick_minutes", false)
+        set(v) = prefs.edit().putBoolean("quick_minutes", v).apply()
     /** 짧은 조각 인코더 창 축소 (실측: 정확도 동일, 조각당 처리 7.2s → 2.0s) */
     var trimEncoder: Boolean
         get() = prefs.getBoolean("trim_encoder", true)
