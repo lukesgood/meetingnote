@@ -122,6 +122,28 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                     Switch(refine, { refine = it; settings.refine = it })
                 }
+                if (refine) {
+                    var quick by remember { mutableStateOf(settings.quickMinutes) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("회의록 먼저 보기", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("정밀 인식을 기다리지 않고 실시간 녹취록으로 회의록을 먼저 만든 뒤, 정밀 인식이 끝나면 다시 만듭니다. " +
+                                "첫 회의록은 빨리 나오지만 전체 처리 시간은 요약 한 번만큼 늘어납니다.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(quick, { quick = it; settings.quickMinutes = it })
+                    }
+                    var refineVocab by remember { mutableStateOf(settings.refineVocabulary) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("정밀 인식에 용어 사전 적용 (실험)", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("용어 사전을 정밀 인식의 힌트로도 씁니다. 회사명·인명 표기가 좋아질 수 있지만 " +
+                                "문장이 길게 뭉쳐 나올 수 있습니다. 끄면 사전은 실시간 인식과 회의록 작성에만 쓰입니다.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(refineVocab, { refineVocab = it; settings.refineVocabulary = it })
+                    }
+                }
                 ModelOption(ModelCatalog.REFINER, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = { confirmDelete = ModelCatalog.REFINER })
                 if (refine && !MeetingEngine.models.isReady(ModelCatalog.REFINER))

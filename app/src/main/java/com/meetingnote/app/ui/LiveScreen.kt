@@ -165,6 +165,14 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                         }
                     }
                 }
+            } else if (s.phase == Phase.REFINING && s.summaryText.isNotBlank()) {
+                // 회의록 먼저 보기: 정밀 인식이 도는 동안 먼저 만든 회의록을 보여 줌
+                Text("먼저 만든 회의록 · 정밀 인식이 끝나면 다시 작성합니다", style = MaterialTheme.typography.titleMedium)
+                Card(Modifier.fillMaxWidth().weight(1f)) {
+                    Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+                        MarkdownText(s.summaryText)
+                    }
+                }
             } else if (s.interpreting) {
                 InterpretPane(s.lines, s.translatePending)
             } else {

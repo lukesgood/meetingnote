@@ -9,11 +9,21 @@ import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
 /**
+ * 실시간 인식의 온도 폴백 간격. whisper.cpp 기본값 0.2는 품질 기준 미달 시 최대 6번 다시 디코딩해
+ * 잡음 섞인 조각에서 지연이 크게 튄다. 0.6이면 재시도 1회(온도 0 → 0.6). 놓친 부분은 회의 후 정밀 인식이 보완.
+ */
+const val LIVE_TEMPERATURE_INC = 0.6f
+
+/** 정밀 인식 VAD: 기본값(0.5 / 30ms)보다 느슨하게 잡아 작은 목소리와 문장 첫머리를 덜 자름 */
+const val REFINE_VAD_THRESHOLD = 0.35f
+const val REFINE_VAD_PAD_MS = 150
+
+/**
  * 녹음과 동시에 음성인식을 수행하는 파이프라인.
  *
  * 최적화 포인트
- *  - 녹음 중에 25~30초 단위로 나눠 바로 인식 → 회의 종료 시 마지막 조각만 남음
- *  - 조각 경계는 25~30초 구간에서 가장 조용한 지점으로 잡아 단어가 잘리지 않게 함
+ *  - 녹음 중에 발화 단위(4~15초)로 나눠 바로 인식 → 회의 종료 시 마지막 조각만 남음
+ *  - 조각 경계는 0.5초 이상 쉬는 지점(없으면 10~15초 구간에서 가장 조용한 지점)으로 잡아 단어가 잘리지 않게 함
  *  - 거의 무음인 조각은 인식 생략
  *  - Whisper 내장 Silero VAD로 조각 내부의 무음 제거
  *  - 이전 조각의 마지막 문장을 initial prompt로 넘겨 문맥 유지
@@ -176,6 +186,7 @@ class StreamingTranscriber(
                 // 인코더 창: 50프레임/초 + 여유, 64 배수 (30초 = 1500)
                 audioCtx = if (trimEncoder) ((pcm.size * 50L / sr + 64 + 63) / 64 * 64).toInt().coerceAtMost(1500) else 0,
                 koEnOnly = language.isEmpty(),
+                temperatureInc = LIVE_TEMPERATURE_INC,
             )
         } catch (e: Exception) {
             Log.e("Transcriber", "transcribe failed", e); null
@@ -192,7 +203,7 @@ class StreamingTranscriber(
             val text = Repetition.collapse(seg.text)
             val key = Repetition.normalize(text)
             when {
-                Hallucination.isLikely(text) -> dropped++
+                Hallucination.isLikely(text, seg.noSpeechProb, seg.avgProb) -> dropped++
                 // 최근 5문장과 같은 문장: 앞 조각의 문장을 프롬프트로 이어받아 베끼는 반복 (환각 연쇄)
                 key.length >= 2 && key in recent -> dropped++
                 else -> {
@@ -212,32 +223,75 @@ class StreamingTranscriber(
 
 /**
  * Whisper가 무음·잡음에서 지어내는 대표 문구 (방송·유튜브 자막 학습의 부작용).
- * 문장 전체가 이런 문구일 때만 제거하고, 실제 발언 안에 섞인 경우는 건드리지 않는다.
+ *
+ * - 강한 패턴: 회의에서 나올 일이 거의 없는 방송 멘트. 짧은 문장에 들어 있으면 항상 제거.
+ * - 약한 패턴: 실제 회의에서도 나오는 표현("알림 설정", 방송사 이름 등). 문장이 사실상 그 문구뿐이거나
+ *   모델의 신뢰도가 낮을 때(무음 확률이 높거나 글자 확률이 낮음)만 제거해 실제 발언을 지우지 않는다.
  */
 object Hallucination {
-    private val patterns = listOf(
+    private val strong = listOf(
         "시청해 ?주셔서 감사",
         "시청해 ?주신 여러분",
-        "시청자 여러분",
-        "구독(과|과 좋아요| 좋아요|,? ?좋아요)",
-        "좋아요(와|,)? ?구독",
-        "알림 ?설정",
+        "구독.{0,6}좋아요",
+        "좋아요.{0,6}구독",
+        "구독.{0,12}알림 ?설정",
         "다음 (영상|시간|주)에서 (만나|뵙)",
         "(지금까지|이상) .{0,12}(뉴스|스토리|기자)",
         "뉴스 스토리",
-        "MBC|KBS|SBS|YTN|JTBC",
+        "(MBC|KBS|SBS|YTN|JTBC) ?뉴스",
         "자막 (제공|제작)|한글자막|자막 by",
         "^[(\\[].*[)\\]]$",                       // 문장 전체가 괄호: (박수), [음악], (두 번째 요리는)
         "^(음악|박수|웃음)$",
-        "오늘의 주인공",
         "이 영상(입니다|이었습니다|을 (보|시청))",
         "영상(을|이) (도움|재미)",
     ).map { Regex(it) }
 
-    fun isLikely(text: String): Boolean {
+    private val weak = listOf(
+        "시청자 여러분",
+        "알림 ?설정",
+        "MBC|KBS|SBS|YTN|JTBC",
+        "오늘의 주인공",
+    ).map { Regex(it) }
+
+    /** whisper.cpp의 무음 판정 기준과 같은 값 */
+    private const val NO_SPEECH_THOLD = 0.6f
+    /** 글자 토큰 평균 확률이 이보다 낮으면 확신 없이 쓴 문장으로 봄 (실측으로 조정 필요) */
+    private const val LOW_PROB_THOLD = 0.5f
+
+    fun isLikely(text: String, noSpeechProb: Float = 0f, avgProb: Float = 1f): Boolean {
         val t = text.trim().trimEnd('.', '!', '?', '~', ' ')
         if (t.isEmpty()) return true
-        return t.length <= 40 && patterns.any { it.containsMatchIn(t) }
+        if (t.length > 40) return false
+        if (strong.any { it.containsMatchIn(t) }) return true
+        val m = weak.firstNotNullOfOrNull { it.find(t) } ?: return false
+        // 문구를 뺀 나머지가 거의 없으면 그 문구만 말한 것 → 환각으로 봄
+        val rest = Repetition.normalize(t.removeRange(m.range)).length
+        return rest <= 2 || noSpeechProb > NO_SPEECH_THOLD || avgProb < LOW_PROB_THOLD
+    }
+}
+
+/** 작은 목소리 보정용 음량 계산 */
+object Loudness {
+    /**
+     * 블록의 말소리 수준(100ms 구간 RMS의 상위 5% 지점)을 약 -20dBFS로 올리는 증폭 배수 (1~10).
+     * 가장 큰 구간이 -6dBFS를 넘지 않고, 배경 소음이 -46dBFS를 넘지 않도록 제한한다.
+     */
+    fun blockGain(pcm: FloatArray, sr: Int): Float {
+        val frame = sr / 10
+        if (pcm.size < frame) return 1f
+        val rms = DoubleArray(pcm.size / frame) { f ->
+            var e = 0.0
+            val s = f * frame
+            for (j in s until s + frame) { val v = pcm[j].toDouble(); e += v * v }
+            sqrt(e / frame)
+        }
+        rms.sort()
+        val speech = rms[(rms.size * 95 / 100).coerceAtMost(rms.size - 1)]
+        val peak = rms[rms.size - 1]
+        val floor = rms[rms.size / 10]
+        if (speech < 0.004) return 1f   // 말소리가 없으면(-48dBFS 미만) 잡음만 키우지 않음
+        val noiseCap = if (floor > 1e-6) 0.005 / floor else 10.0
+        return minOf(0.1 / speech, 0.5 / peak, 10.0, noiseCap).coerceAtLeast(1.0).toFloat()
     }
 }
 

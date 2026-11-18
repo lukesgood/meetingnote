@@ -48,12 +48,14 @@ Java_com_meetingnote_whisper_WhisperLib_nativeFree(JNIEnv *, jobject, jlong hand
     if (handle) whisper_free(reinterpret_cast<whisper_context *>(handle));
 }
 
-// 반환: UTF-8 바이트, 각 줄 "t0_ms\tt1_ms\ttext\n"
+// 반환: UTF-8 바이트, 각 줄 "t0_ms\tt1_ms\tno_speech_prob\tavg_token_prob\ttext\n"
+// vadThreshold/vadPadMs/temperatureInc: 음수면 whisper.cpp 기본값 사용
 JNIEXPORT jbyteArray JNICALL
 Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
         JNIEnv * env, jobject, jlong handle, jfloatArray pcm, jint threads,
         jstring lang, jint beamSize, jstring initialPrompt, jstring vadModelPath, jint audioCtx,
-        jboolean koEnOnly, jboolean noContext, jobject progress) {
+        jboolean koEnOnly, jboolean noContext, jboolean carryPrompt, jfloat vadThreshold, jint vadPadMs,
+        jfloat temperatureInc, jobject progress) {
     auto * ctx = reinterpret_cast<whisper_context *>(handle);
     if (!ctx) return nullptr;
 
@@ -85,11 +87,35 @@ Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
     if (!vadPath.empty()) {
         p.vad = true;
         p.vad_model_path = vadPath.c_str();
+        // 기본값(임계값 0.5, 앞뒤 여유 30ms)은 작은 목소리의 문장 첫머리를 자를 수 있어 호출 쪽에서 조절
+        if (vadThreshold >= 0.0f) p.vad_params.threshold     = vadThreshold;
+        if (vadPadMs     >= 0)    p.vad_params.speech_pad_ms = vadPadMs;
     }
+    // 품질 기준 미달 시 온도를 올려 다시 디코딩하는 폴백 간격. 기본 0.2는 최대 6회 재시도라
+    // 잡음 조각에서 지연이 크게 튄다 (0 = 폴백 없음, 0.6 = 1회만)
+    if (temperatureInc >= 0.0f) p.temperature_inc = temperatureInc;
     // 짧은 조각은 인코더 창을 실제 길이에 맞게 줄여 연산 절감 (0 = 기본 30초 창)
     if (audioCtx > 0) p.audio_ctx = audioCtx;
     // 앞 구간 인식 결과를 다음 30초 창의 문맥으로 넘기지 않음 (잘못 인식한 문장이 이어지며 번지는 것 방지)
-    if (noContext) { p.no_context = true; p.n_max_text_ctx = 0; }
+    // 주의: n_max_text_ctx가 0이면 initial prompt(용어 사전)도 함께 버려진다.
+    // carryPrompt를 켜면 사전을 모든 창에 고정으로 넣고(carry_initial_prompt) 문맥 예산을 사전 길이에 딱 맞춰
+    // 앞 구간 결과가 들어갈 자리만 없앤다. 단, 시간 표시가 없는 사전 문구가 문맥이 되면 문장 구분(시간 토큰)이
+    // 줄어 한 창이 한 문장으로 뭉치는 경향이 있어(base 모델 실측) 기본은 꺼 둔다.
+    if (noContext) {
+        p.no_context = true;
+        int n_prompt = 0;
+        if (carryPrompt && !prompt.empty()) {
+            std::vector<whisper_token> tk(1024);
+            n_prompt = whisper_tokenize(ctx, prompt.c_str(), tk.data(), (int) tk.size());
+            if (n_prompt < 0) n_prompt = -n_prompt;   // 버퍼보다 길면 필요한 개수가 음수로 돌아옴
+        }
+        if (n_prompt > 0) {
+            p.carry_initial_prompt = true;
+            p.n_max_text_ctx       = n_prompt + 1;
+        } else {
+            p.n_max_text_ctx = 0;
+        }
+    }
     // 진행률(0~100) 콜백: 긴 오디오 정밀 인식의 진행 표시용
     struct Prog { JNIEnv * env; jobject obj; jmethodID mid; } prog { env, progress, nullptr };
     if (progress) {
@@ -127,6 +153,20 @@ Java_com_meetingnote_whisper_WhisperLib_nativeTranscribe(
         out += std::to_string(whisper_full_get_segment_t0(ctx, i) * 10);
         out += '\t';
         out += std::to_string(whisper_full_get_segment_t1(ctx, i) * 10);
+        out += '\t';
+        // 신뢰도: 무음일 확률, 글자 토큰의 평균 확률 (환각 문구 판정용)
+        out += std::to_string(whisper_full_get_segment_no_speech_prob(ctx, i));
+        out += '\t';
+        {
+            const whisper_token eot = whisper_token_eot(ctx);
+            const int nt = whisper_full_n_tokens(ctx, i);
+            double sum = 0.0; int cnt = 0;
+            for (int k = 0; k < nt; ++k) {
+                if (whisper_full_get_token_id(ctx, i, k) >= eot) continue;   // 특수·시간 토큰 제외
+                sum += whisper_full_get_token_p(ctx, i, k); ++cnt;
+            }
+            out += std::to_string(cnt > 0 ? sum / cnt : 1.0);
+        }
         out += '\t';
         out += whisper_full_get_segment_text(ctx, i);
         out += '\n';
