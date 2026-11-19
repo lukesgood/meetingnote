@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.meetingnote.app.MeetingEngine
 import com.meetingnote.app.Phase
@@ -58,6 +59,7 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
     val s by MeetingEngine.state.collectAsState()
     var paused by remember { mutableStateOf(MeetingEngine.isPaused) }
     var wasBusy by remember { mutableStateOf(false) }
+    var showLive by remember { mutableStateOf(MeetingEngine.settings.showLiveTranscript) }
 
     LaunchedEffect(s.phase) {
         if (s.busy) wasBusy = true
@@ -128,7 +130,9 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                                 },
                                 compact = compact)
                         }
-                        val rtf = s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중"
+                        val model = if (s.phase != Phase.RECORDING) ""
+                            else if (MeetingEngine.liveSpec == com.meetingnote.app.ModelCatalog.REFINER) "정밀 모델 · " else "기본 모델 · "
+                        val rtf = model + (s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중")
                         if (s.phase != Phase.SUMMARIZING) Text(
                             "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개" +
                                 (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
@@ -197,6 +201,21 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                     }
                 } else if (s.interpreting) {
                     InterpretPane(s.lines, s.translatePending, compact = compact)
+                } else if (s.phase == Phase.RECORDING && !showLive) {
+                    // 녹취록 숨김: 인식은 계속하고 문장 수만 알림
+                    Card(Modifier.fillMaxWidth().weight(1f)) {
+                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("녹취록을 숨겼습니다", style = MaterialTheme.typography.titleMedium)
+                            Spacer(Modifier.height(8.dp))
+                            Text("녹음과 인식은 계속하고 있습니다 (지금까지 ${s.lines.size}문장).\n" +
+                                "회의가 끝나면 녹취록과 회의록을 만듭니다.",
+                                style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedButton(onClick = { showLive = true }) { Text("이번만 보기") }
+                        }
+                    }
                 } else {
                     Text("실시간 녹취록", style = MaterialTheme.typography.titleMedium)
                     val listState = rememberLazyListState()

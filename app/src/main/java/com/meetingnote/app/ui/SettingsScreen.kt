@@ -1,5 +1,7 @@
 package com.meetingnote.app.ui
 
+import com.meetingnote.app.DeviceCheck
+import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import android.content.Intent
@@ -113,6 +115,38 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ModelOption(ModelCatalog.VAD, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = { confirmDelete = ModelCatalog.VAD })
                 HorizontalDivider()
+                var liveModel by remember { mutableStateOf(settings.liveModel) }
+                Text("실시간 인식 모델", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("auto" to "자동", "small" to "기본", "turbo" to "정밀").forEach { (id, label) ->
+                        FilterChip(selected = liveModel == id, onClick = { liveModel = id; settings.liveModel = id },
+                            label = { Text(label) }, enabled = !engine.busy)
+                    }
+                }
+                val turboReady = MeetingEngine.models.isReady(ModelCatalog.REFINER)
+                val picked = remember(liveModel, tick) { MeetingEngine.liveSttSpec() }
+                Text(
+                    "기본(small)은 빠르지만 회의실처럼 마이크에서 먼 목소리는 오인식이 많습니다. 정밀(turbo)은 훨씬 정확하지만 " +
+                        "약 3배 느려 큰 코어를 많이 씁니다. 자동은 기기 점검 결과로 정밀 모델을 쓸 수 있으면 씁니다. " +
+                        "통역 중에는 항상 기본 모델을 씁니다.\n" +
+                        when {
+                            !turboReady && liveModel != "small" -> "→ 정밀 모델이 없어 기본 모델을 씁니다. 아래에서 내려받으세요."
+                            liveModel == "auto" && DeviceCheck.bench == null -> "→ 기기 점검 전이라 기본 모델을 씁니다."
+                            else -> "→ 지금 설정으로는 ${if (picked == ModelCatalog.REFINER) "정밀" else "기본"} 모델을 씁니다."
+                        },
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                var showLive by remember { mutableStateOf(settings.showLiveTranscript) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("녹음 중 녹취록 표시", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text("끄면 녹음 중에는 파형만 보입니다. 인식은 계속하므로 회의 후 녹취록과 회의록은 똑같이 만들어집니다. " +
+                            "(통역 중에는 항상 표시)",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(showLive, { showLive = it; settings.showLiveTranscript = it })
+                }
+                HorizontalDivider()
                 var refine by remember { mutableStateOf(settings.refine) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -125,6 +159,16 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Switch(refine, { refine = it; settings.refine = it })
                 }
                 if (refine) {
+                    var skipRefine by remember { mutableStateOf(settings.skipRefineAfterTurbo) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("실시간 인식이 정밀 모델이면 생략", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("녹음 중에 이미 정밀 모델로 인식했으면 회의 후 다시 인식하지 않고 바로 회의록을 만듭니다. " +
+                                "회의록이 녹음 시간의 약 0.7배만큼 빨리 나오지만, 다시 인식할 때보다 정확도는 조금 낮을 수 있습니다.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(skipRefine, { skipRefine = it; settings.skipRefineAfterTurbo = it })
+                    }
                     var quick by remember { mutableStateOf(settings.quickMinutes) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {

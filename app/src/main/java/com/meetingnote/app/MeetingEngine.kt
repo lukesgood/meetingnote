@@ -168,6 +168,14 @@ object MeetingEngine {
                     if (!inForeground()) throw bg
                     Log.i("DeviceCheck", "stt ${best}ms rtf=%.3f".format(rtf))
                 }
+                // 정밀 모델(turbo)을 실시간 인식에 쓸 수 있는지: 같은 조건으로 측정
+                var turboRtf: Double? = null
+                if (models.isReady(ModelCatalog.REFINER) && models.isReady(ModelCatalog.VAD)) {
+                    _checking.value = "정밀 모델 속도 측정 중…"
+                    turboRtf = benchStt(ModelCatalog.REFINER)
+                    if (!inForeground()) throw bg
+                    Log.i("DeviceCheck", "turbo rtf=%.3f".format(turboRtf))
+                }
                 val llm = mutableMapOf<String, DeviceCheck.LlmBench>()
                 for (spec in ModelCatalog.llms.filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
                     _checking.value = "${spec.title.substringBefore(" (")} 속도 측정 중…"
@@ -184,7 +192,7 @@ object MeetingEngine {
                             "-> %.1f / %.2f tok/s".format(st.promptTps, st.genTps))
                     }
                 }
-                DeviceCheck.bench = DeviceCheck.Bench(rtf, llm, System.currentTimeMillis(), settings.threads)
+                DeviceCheck.bench = DeviceCheck.Bench(rtf, llm, System.currentTimeMillis(), settings.threads, turboRtf)
                 ErrorReporter.trail("기기 점검 완료")
             } catch (e: Throwable) {
                 Log.e("DeviceCheck", "check failed", e)
@@ -196,6 +204,46 @@ object MeetingEngine {
             }
         }
     }
+
+    /** 점검용 10초 음성을 실시간 인식과 같은 조건으로 두 번 인식해 빠른 쪽의 처리 배율 */
+    private fun benchStt(spec: ModelSpec): Double {
+        val w = loadWhisper(spec)
+        val pcm = DeviceCheck.loadSample()
+        val audioCtx = ((pcm.size * 50L / AudioRecorder.SAMPLE_RATE + 64 + 63) / 64 * 64).toInt()
+        var best = Long.MAX_VALUE
+        try {
+            repeat(2) {
+                val t0 = System.currentTimeMillis()
+                w.transcribe(pcm.copyOf(), threads = settings.threads, language = "ko", beamSize = 5,
+                    vadModelPath = models.file(ModelCatalog.VAD).path,
+                    audioCtx = if (settings.trimEncoder) audioCtx else 0,
+                    temperatureInc = LIVE_TEMPERATURE_INC)
+                best = minOf(best, System.currentTimeMillis() - t0)
+            }
+        } finally { releaseWhisper() }
+        return best / (pcm.size * 1000.0 / AudioRecorder.SAMPLE_RATE)
+    }
+
+    /**
+     * 실시간 인식 모델.
+     *  - 통역 중: small (번역 모델과 큰 코어를 나눠 써야 해서)
+     *  - 설정이 small/turbo면 그대로 (turbo 모델이 없으면 small)
+     *  - 자동: turbo 모델이 있고 기기 점검에서 충분히 빠르면 turbo
+     * small은 실제 회의(원거리 마이크)에서 글자 오류가 많아 (2026-11-19 회의 36%) 가능하면 turbo를 쓴다.
+     */
+    fun liveSttSpec(): ModelSpec {
+        if (settings.interpret) return settings.whisper
+        val turbo = ModelCatalog.REFINER
+        return when (settings.liveModel) {
+            "small" -> settings.whisper
+            "turbo" -> if (models.isReady(turbo)) turbo else settings.whisper
+            else -> if (models.isReady(turbo) && DeviceCheck.turboLiveOk()) turbo else settings.whisper
+        }
+    }
+
+    /** 이번 녹음의 실시간 인식 모델 (정밀 인식 생략 판단용) */
+    var liveSpec: ModelSpec? = null
+        private set
 
     fun missingSttModels(spec: ModelSpec = settings.whisper) = listOf(spec, ModelCatalog.VAD).filterNot { models.isReady(it) }
 
@@ -218,8 +266,10 @@ object MeetingEngine {
 
     fun startRecording() {
         if (_state.value.busy || checkingBlocks()) return
-        val sttSpec = settings.whisper
+        val sttSpec = liveSttSpec()
         if (!checkModels(sttSpec)) return
+        liveSpec = sttSpec
+        ErrorReporter.trail("실시간 인식 모델: ${sttSpec.id}")
         val meeting = repo.create().copy(sttModel = sttSpec.title).also { repo.save(it) }
         _state.value = EngineState(Phase.LOADING, meetingId = meeting.id, message = "음성인식 모델 불러오는 중…")
         startService()
@@ -332,7 +382,7 @@ object MeetingEngine {
             repo.saveTranscript(id, lines)
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
             releaseWhisper()
-            val refine = shouldRefine(lines)
+            val refine = shouldRefine(lines, liveTurbo = liveSpec == ModelCatalog.REFINER)
             // 회의록 먼저 보기: 정밀 인식을 기다리지 않고 실시간 녹취록으로 먼저 작성하고, 정밀 인식 뒤 다시 작성
             val quick = refine && autoSummarize && settings.quickMinutes && lines.isNotEmpty() && models.isReady(settings.llm)
             // 먼저 만드는 회의록이 실패하거나 중단돼도 정밀 인식은 계속한다 (녹취록 정확도가 더 중요)
@@ -447,8 +497,11 @@ object MeetingEngine {
     // ------------------------------------------------- 회의 후 정밀 인식
 
     /** 정밀 인식 대상: 설정이 켜져 있고 모델이 있으며, 통역 회의가 아님(번역이 실시간 녹취 문장에 붙어 있음) */
-    private fun shouldRefine(lines: List<TranscriptLine>) =
-        settings.refine && models.isReady(ModelCatalog.REFINER) && !settings.interpret && lines.none { it.translation != null }
+    /** @param liveTurbo 방금 녹음의 실시간 인식을 정밀 모델로 했는지 (가져온 파일·다시 인식은 false) */
+    private fun shouldRefine(lines: List<TranscriptLine>, liveTurbo: Boolean = false) =
+        settings.refine && models.isReady(ModelCatalog.REFINER) && !settings.interpret && lines.none { it.translation != null } &&
+            // 실시간 인식을 이미 정밀 모델로 했으면 생략 옵션
+            !(settings.skipRefineAfterTurbo && liveTurbo)
 
     /**
      * 녹음 전체를 정밀 모델(large-v3-turbo)로 다시 인식해 녹취록을 교체한다.
@@ -707,6 +760,18 @@ class Settings(context: Context) {
     var refineVocabulary: Boolean
         get() = prefs.getBoolean("refine_vocabulary", false)
         set(v) = prefs.edit().putBoolean("refine_vocabulary", v).apply()
+    /** 실시간 인식 모델: "auto"(기기 속도에 따라 turbo) / "small" / "turbo" */
+    var liveModel: String
+        get() = prefs.getString("live_model", "auto") ?: "auto"
+        set(v) = prefs.edit().putString("live_model", v).apply()
+    /** 녹음 중 실시간 녹취록 표시 (끄면 파형만 보이고 인식은 계속함 — 회의 후 정밀 인식·복구용) */
+    var showLiveTranscript: Boolean
+        get() = prefs.getBoolean("show_live_transcript", true)
+        set(v) = prefs.edit().putBoolean("show_live_transcript", v).apply()
+    /** 실시간 인식을 정밀 모델(turbo)로 했으면 회의 후 정밀 인식 생략 (회의록이 빨리 나옴) */
+    var skipRefineAfterTurbo: Boolean
+        get() = prefs.getBoolean("skip_refine_after_turbo", false)
+        set(v) = prefs.edit().putBoolean("skip_refine_after_turbo", v).apply()
     /** 회의록 먼저 보기: 정밀 인식 전에 실시간 녹취록으로 회의록을 먼저 만들고, 정밀 인식 뒤 다시 작성 */
     var quickMinutes: Boolean
         get() = prefs.getBoolean("quick_minutes", false)

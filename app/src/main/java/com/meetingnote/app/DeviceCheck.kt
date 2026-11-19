@@ -17,7 +17,9 @@ object DeviceCheck {
     data class Item(val title: String, val level: Level, val detail: String)
 
     data class LlmBench(val promptTps: Double, val genTps: Double)
-    data class Bench(val sttRtf: Double?, val llm: Map<String, LlmBench>, val at: Long, val threads: Int)
+    data class Bench(val sttRtf: Double?, val llm: Map<String, LlmBench>, val at: Long, val threads: Int,
+                     /** 정밀 모델(turbo)로 같은 10초를 실시간 조건으로 인식한 속도 (모델이 있을 때만) */
+                     val turboRtf: Double? = null)
 
     // ---- 기준 기기(SD870, 스레드 4) 기기 점검 실측값 (2026-11-17, 2회 평균): 점검 결과를 실제 처리 시간으로 환산하는 데 사용
     /** 점검용 10초 음성의 처리 시간 / 음성 길이 */
@@ -107,16 +109,31 @@ object DeviceCheck {
                         j.getJSONObject(k).let { LlmBench(it.getDouble("p"), it.getDouble("g")) }
                     }
                 }
-                Bench(if (o.has("stt")) o.getDouble("stt") else null, llm, o.getLong("at"), o.getInt("threads"))
+                Bench(if (o.has("stt")) o.getDouble("stt") else null, llm, o.getLong("at"), o.getInt("threads"),
+                    if (o.has("turbo")) o.getDouble("turbo") else null)
             }.getOrNull()
         }
         set(b) {
             if (b == null) { prefs.edit().remove("bench").apply(); return }
             val o = JSONObject().put("at", b.at).put("threads", b.threads)
             b.sttRtf?.let { o.put("stt", it) }
+            b.turboRtf?.let { o.put("turbo", it) }
             o.put("llm", JSONObject().apply { b.llm.forEach { (k, v) -> put(k, JSONObject().put("p", v.promptTps).put("g", v.genTps)) } })
             prefs.edit().putString("bench", o.toString()).apply()
         }
+
+    /**
+     * 실시간 인식에 turbo를 써도 될 만큼 빠른지.
+     * 실측이 없으면 small 실측의 3배로 추정 (PC·SD870에서 turbo는 small의 약 3배 시간).
+     * 0.7 이하: 10초 발언을 약 7초 안에 처리 → 회의 내내 밀리지 않음 (발열로 느려질 여유 포함)
+     */
+    fun turboLiveOk(): Boolean {
+        val b = bench ?: return false
+        val est = b.turboRtf ?: b.sttRtf?.times(TURBO_SMALL_RATIO) ?: return false
+        return est <= TURBO_LIVE_MAX_RTF
+    }
+    const val TURBO_SMALL_RATIO = 3.0
+    const val TURBO_LIVE_MAX_RTF = 0.7
 
     /** 요약 모델의 처리 속도: 기기 점검 실측값, 없으면 기준 기기 값 */
     fun llmSpeed(spec: ModelSpec): LlmBench =
@@ -142,6 +159,12 @@ object DeviceCheck {
             rtf <= 0.8 -> Item("실시간 녹취", Level.SLOW, "가능 · 말한 뒤 약 ${(1 + rtf * 10).toInt() + 1}초 후 표시 (긴 발언에서 밀릴 수 있음)")
             else -> Item("실시간 녹취", Level.NO,
                 "처리가 말 속도를 따라가지 못합니다 (10초 음성에 ${"%.1f".format(rtf * 10)}초). 녹음 후 일괄 인식은 가능합니다.")
+        }
+        // 실시간 녹취에 정밀 모델(turbo)을 쓸 수 있는지 (느려도 small로 녹취하므로 문제 항목은 아님)
+        b?.turboRtf?.let { t ->
+            items += Item("실시간 녹취 · 정밀 모델", Level.OK,
+                if (t <= TURBO_LIVE_MAX_RTF) "사용 · 10초 음성에 ${"%.1f".format(t * 10)}초 (통역 중에는 기본 모델)"
+                else "느려서 기본 모델 사용 (10초 음성에 ${"%.1f".format(t * 10)}초)")
         }
         // 실시간 통역 (항상 Qwen3)
         val q = ModelCatalog.INTERPRETER
@@ -200,7 +223,8 @@ object DeviceCheck {
             " · 엔진 ${WhisperNative.loaded ?: (if (WhisperNative.supportsAccelerated) "dp" else "base")}"
         val i8 = if (hasI8mm) " i8mm" else ""
         val bt = b?.let { x ->
-            " · 실측(스레드 ${x.threads}): STT ${x.sttRtf?.let { "%.2f".format(it) } ?: "-"}x, " +
+            " · 실측(스레드 ${x.threads}): STT ${x.sttRtf?.let { "%.2f".format(it) } ?: "-"}x" +
+                " turbo ${x.turboRtf?.let { "%.2f".format(it) } ?: "-"}x, " +
                 x.llm.entries.joinToString(", ") { (k, v) -> "$k ${"%.0f".format(v.promptTps)}/${"%.1f".format(v.genTps)} tok/s" }
         } ?: " · 실측 없음"
         return "$dot$i8$bt"

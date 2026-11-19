@@ -43,7 +43,7 @@ object ModelCatalog {
         note = "무음 구간 제거 · 문장 누락 방지",
     )
 
-    /** 회의 후 정밀 인식용 (녹음 중 실시간 인식은 small) */
+    /** 회의 후 정밀 인식용. 기기가 충분히 빠르면 녹음 중 실시간 인식에도 사용 (설정 > 실시간 인식 모델) */
     val WHISPER_TURBO = ModelSpec(
         id = "whisper-large-v3-turbo-q8",
         title = "Whisper large-v3-turbo (q8_0)",
@@ -51,7 +51,7 @@ object ModelCatalog {
         url = "$HF/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
         sizeBytes = 874_188_075,
         kind = ModelSpec.Kind.STT,
-        note = "회의 후 정밀 인식 · 작은 목소리·숫자·직함 인식이 크게 좋아짐 · 녹음 시간의 약 0.7배 소요",
+        note = "정밀 인식 · 작은 목소리·숫자·직함 인식이 크게 좋아짐 · 회의 후 다시 인식하면 녹음 시간의 약 0.7배 소요 · 빠른 기기에서는 실시간 인식에도 사용",
     )
 
     val QWEN3_4B = ModelSpec(
