@@ -33,6 +33,8 @@ data class Meeting(
     /** 녹음 진행 중 표시. 앱 시작 시 true로 남아 있으면 비정상 종료로 판단 */
     val recording: Boolean = false,
     val recovered: Boolean = false,
+    /** 용어 사전으로 교정한 곳 수 (원본은 transcript_raw.json) */
+    val termFixes: Int = 0,
 )
 
 /** 회의별 디렉터리: meta.json, audio.wav, transcript.json, minutes.md */
@@ -61,6 +63,7 @@ class MeetingRepository(context: Context) {
             .put("durationMs", m.durationMs).put("hasMinutes", m.hasMinutes)
             .put("modelUsed", m.modelUsed ?: JSONObject.NULL).put("sttModel", m.sttModel ?: JSONObject.NULL).put("stats", m.stats ?: JSONObject.NULL)
             .put("titleEdited", m.titleEdited).put("recording", m.recording).put("recovered", m.recovered)
+            .put("termFixes", m.termFixes)
         metaFile(m.id).writeText(o.toString(2))
     }
 
@@ -80,6 +83,7 @@ class MeetingRepository(context: Context) {
             titleEdited = o.optBoolean("titleEdited"),
             recording = o.optBoolean("recording"),
             recovered = o.optBoolean("recovered"),
+            termFixes = o.optInt("termFixes"),
         )
     }
 
@@ -96,6 +100,19 @@ class MeetingRepository(context: Context) {
         val f = transcriptFile(id)
         val b = File(dir(id), "transcript_live.json")
         if (f.exists() && !b.exists()) f.copyTo(b)
+    }
+
+    /** 용어 교정 전 녹취록 보관 (교정할 때마다 그 직전 녹취록으로 덮어씀) */
+    fun backupRawTranscript(id: String) {
+        transcriptFile(id).takeIf { it.exists() }?.copyTo(File(dir(id), "transcript_raw.json"), overwrite = true)
+    }
+
+    /** 용어 교정 되돌리기: 보관한 원본으로 녹취록을 되돌림 */
+    fun restoreRawTranscript(id: String): Boolean {
+        val b = File(dir(id), "transcript_raw.json")
+        if (!b.exists()) return false
+        b.copyTo(transcriptFile(id), overwrite = true); b.delete()
+        return true
     }
 
     fun saveTranscript(id: String, lines: List<TranscriptLine>) {

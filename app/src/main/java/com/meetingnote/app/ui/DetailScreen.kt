@@ -62,6 +62,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Spellcheck
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -78,7 +79,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
     var version by remember { mutableIntStateOf(0) }
     val meeting = remember(id, engine.phase, version) { repo.get(id) }
     val minutes = remember(id, engine.phase, version) { repo.loadMinutes(id) }
-    val transcript = remember(id, engine.phase) { repo.loadTranscript(id) }
+    val transcript = remember(id, engine.phase, version) { repo.loadTranscript(id) }
     val hasTranslation = transcript.any { it.translation != null || it.lang != null }
     var tab by remember { mutableIntStateOf(if (minutes != null) 0 else 1) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -129,7 +130,13 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                 meeting.sttModel?.let { Badge(Icons.Default.GraphicEq, "인식 " + it.substringBefore(" ("), c.surfaceContainerHigh, c.onSurface) }
                 meeting.modelUsed?.let { Badge(Icons.Default.AutoAwesome, "요약 " + it.substringBefore(" ("), c.surfaceContainerHigh, c.onSurface) }
                 meeting.stats?.let { Badge(null, it, c.surfaceContainerHigh, c.onSurfaceVariant) }
+                if (meeting.termFixes > 0) Badge(Icons.Default.Spellcheck, "용어 ${meeting.termFixes}곳 교정", c.surfaceContainerHigh, c.onSurface)
             }
+            if (meeting.termFixes > 0) Text(
+                "용어 사전에 맞춰 녹취록의 잘못 인식된 표기를 고쳤습니다. 교정 되돌리기",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable(enabled = !engine.busy) { MeetingEngine.undoTermFixes(id); version++ },
+            )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(
                     enabled = !engine.busy && transcript.isNotEmpty(),

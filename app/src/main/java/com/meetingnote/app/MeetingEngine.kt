@@ -396,6 +396,7 @@ object MeetingEngine {
             val lines = _state.value.lines
             repo.saveTranscript(id, lines)
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
+            applyTermFixes(id)
             releaseWhisper()
             val refine = shouldRefine(lines, liveTurbo = liveSpec == ModelCatalog.REFINER)
             // 회의록 먼저 보기: 정밀 인식을 기다리지 않고 실시간 녹취록으로 먼저 작성하고, 정밀 인식 뒤 다시 작성
@@ -421,6 +422,31 @@ object MeetingEngine {
                 else -> { releaseSharedLlm(); finishIdle() }
             }
         }
+    }
+
+    /**
+     * 용어 사전으로 녹취록 교정 (삼촌리처치 → 삼성리서치 등). 녹취록이 확정될 때마다(녹음 종료·정밀 인식·파일 인식) 호출.
+     * 고친 곳이 있으면 원본을 transcript_raw.json에 보관하고 회의 정보에 고친 곳 수를 남긴다.
+     */
+    private fun applyTermFixes(id: String) {
+        val terms = TermCorrector.parseTerms(settings.vocabulary)
+        if (terms.isEmpty()) return
+        runCatching {
+            val r = TermCorrector.correct(repo.loadTranscript(id), terms)
+            if (r.fixes.isEmpty()) { repo.get(id)?.let { repo.save(it.copy(termFixes = 0)) }; return }
+            repo.backupRawTranscript(id)
+            repo.saveTranscript(id, r.lines)
+            repo.get(id)?.let { repo.save(it.copy(termFixes = r.fixes.size)) }
+            if (_state.value.meetingId == id) _state.update { it.copy(lines = r.lines) }
+            Log.i(TAG, "term fixes: " + r.fixes.joinToString { "${it.from}→${it.to}" })
+            ErrorReporter.trail("용어 교정 ${r.fixes.size}곳")
+        }.onFailure { Log.e(TAG, "term fix failed", it) }
+    }
+
+    /** 용어 교정 되돌리기 */
+    fun undoTermFixes(id: String) {
+        if (_state.value.busy) return
+        if (repo.restoreRawTranscript(id)) repo.get(id)?.let { repo.save(it.copy(termFixes = 0)) }
     }
 
     // ------------------------------------------------- 파일에서 인식 (가져오기/재인식)
@@ -477,6 +503,7 @@ object MeetingEngine {
                 t.finish()
                 finishInterpreter()
                 repo.saveTranscript(meetingId, _state.value.lines)
+                applyTermFixes(meetingId)
                 releaseWhisper()
                 if (thenSummarize && _state.value.lines.isNotEmpty()) summarizeInternal(meetingId) else { releaseSharedLlm(); finishIdle() }
             } catch (e: Throwable) {
@@ -606,6 +633,7 @@ object MeetingEngine {
             repo.saveTranscript(id, out)
             repo.get(id)?.let { repo.save(it.copy(sttModel = "${spec.title.substringBefore(" (")} (정밀 인식)")) }
             _state.update { it.copy(lines = out) }
+            applyTermFixes(id)
         }
         val sec = (System.currentTimeMillis() - t0) / 1000
         Log.i(TAG, "refine done: ${total / sr}s audio in ${sec}s, ${out.size} lines")

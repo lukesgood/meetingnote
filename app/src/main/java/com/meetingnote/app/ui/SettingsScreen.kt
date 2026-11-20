@@ -408,7 +408,9 @@ private fun VocabularyCard() {
             keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
         )
         val n = vocab.split(',', '\n').count { it.isNotBlank() }
-        Hint(if (n == 0) "음성인식 힌트와 회의록 표기 교정에 함께 쓰입니다." else "용어 ${n}개 · 음성인식 힌트와 회의록 표기 교정에 쓰입니다. 입력하는 즉시 저장됩니다.")
+        Hint((if (n == 0) "" else "용어 ${n}개 · ") +
+            "음성인식 힌트로 쓰이고, 회의가 끝나면 녹취록에서 발음이 비슷하게 잘못 인식된 표기를 이 용어로 고칩니다 " +
+            "(예: 삼촌리처치 → 삼성리서치, 원본은 보관되어 회의 화면에서 되돌릴 수 있음). 입력하는 즉시 저장됩니다.")
     }
 }
 

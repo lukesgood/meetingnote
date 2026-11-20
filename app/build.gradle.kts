@@ -36,6 +36,8 @@ android {
 kotlin { jvmToolchain(17) }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")   // 안드로이드 org.json은 단위 테스트에서 동작하지 않음
     implementation(project(":native-whisper"))
     implementation(project(":native-llama"))
     runtimeOnly(project(":native-whisper-base"))
