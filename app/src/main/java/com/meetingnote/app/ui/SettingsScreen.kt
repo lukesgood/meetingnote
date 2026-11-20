@@ -95,7 +95,6 @@ import java.io.File
 fun SettingsScreen(onBack: () -> Unit) {
     val settings = MeetingEngine.settings
     val engine by MeetingEngine.state.collectAsState()
-    var llm by remember { mutableStateOf(settings.llm) }
     var tick by remember { mutableIntStateOf(0) }           // 다운로드 진행률·용량 갱신
     LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }
     var reporting by remember { mutableStateOf(false) }
@@ -111,6 +110,9 @@ fun SettingsScreen(onBack: () -> Unit) {
             SectionCard(Icons.Default.GraphicEq, "음성인식", "녹음을 글로 바꾸는 모델입니다.") {
                 ModelOption(ModelCatalog.WHISPER, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = {})
+                HorizontalDivider()
+                ModelOption(ModelCatalog.REFINER, selected = null, tick = tick, busy = engine.busy,
+                    onSelect = {}, onDelete = { confirmDelete = ModelCatalog.REFINER })
                 HorizontalDivider()
                 ModelOption(ModelCatalog.VAD, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = { confirmDelete = ModelCatalog.VAD })
@@ -190,21 +192,21 @@ fun SettingsScreen(onBack: () -> Unit) {
                         Switch(refineVocab, { refineVocab = it; settings.refineVocabulary = it })
                     }
                 }
-                ModelOption(ModelCatalog.REFINER, selected = null, tick = tick, busy = engine.busy,
-                    onSelect = {}, onDelete = { confirmDelete = ModelCatalog.REFINER })
                 if (refine && !MeetingEngine.models.isReady(ModelCatalog.REFINER))
                     Hint("정밀 인식을 쓰려면 위 모델(874MB)을 내려받으세요. 없으면 실시간 녹취록으로 회의록을 만듭니다.")
             }
         }
         val llmCard: @Composable () -> Unit = {
             SectionCard(Icons.Default.Summarize, "회의록 요약", "녹취록으로 회의록과 제목을 만드는 모델입니다.") {
-                ModelCatalog.llms.forEach { spec ->
-                    ModelOption(spec, selected = llm == spec, tick = tick, busy = engine.busy,
-                        onSelect = { llm = spec; settings.llm = spec },
-                        onDelete = { confirmDelete = spec })
+                ModelOption(ModelCatalog.LLM, selected = null, tick = tick, busy = engine.busy,
+                    onSelect = {}, onDelete = { confirmDelete = ModelCatalog.LLM })
+                Hint("Gemma 4 하나로 회의록과 실시간 통역을 모두 합니다.")
+                // 이전 버전에서 받은 모델 파일이 남아 있으면 삭제할 수 있게 표시
+                ModelCatalog.retired.filter { remember(tick) { MeetingEngine.models.file(it).exists() } }.forEach { spec ->
+                    HorizontalDivider()
+                    ModelOption(spec, selected = null, tick = tick, busy = engine.busy,
+                        onSelect = {}, onDelete = { confirmDelete = spec })
                 }
-                Hint("Gemma 4는 실시간 통역에도 쓰여서, 하나만 받으면 회의록과 통역을 모두 쓸 수 있습니다. " +
-                    "EXAONE은 비상업적 용도로만 사용할 수 있습니다.")
             }
         }
         val vocabCard: @Composable () -> Unit = { VocabularyCard() }
@@ -363,13 +365,7 @@ private fun LanguageCard(tick: Int) {
             val ready = remember(tick) { MeetingEngine.models.isReady(spec) }
             val turbo = remember(tick) { MeetingEngine.liveSttSpec() == ModelCatalog.REFINER }
             Hint(
-                "번역은 회의록 모델 설정과 상관없이 ${gemma.title.substringBefore(" (")}(없으면 Qwen3)로 기기 안에서 합니다. " +
-                    when {
-                        spec == gemma && ready -> "지금은 ${gemma.title.substringBefore(" (")}로 통역합니다."
-                        ready -> "${gemma.title.substringBefore(" (")}가 없어 ${spec.title.substringBefore(" (")}로 통역합니다. " +
-                            "${gemma.title.substringBefore(" (")}를 받으면 번역이 약 2배 빨라지고 숫자·고유명사가 더 정확합니다."
-                        else -> ""
-                    } +
+                "번역은 회의록과 같은 ${gemma.title.substringBefore(" (")}로 기기 안에서 합니다." +
                     " 통역 중 실시간 인식은 " +
                     (if (turbo) "정밀 모델을 씁니다(기기 점검 결과 번역과 함께 돌려도 충분히 빠름)."
                      else "기본 모델을 씁니다. 통역 모델을 받은 뒤 기기 점검을 하면 정밀 모델을 쓸 수 있는지 판단합니다.") +
@@ -494,8 +490,6 @@ private fun AboutCard(onReport: () -> Unit) {
                 "Whisper small (OpenAI)" to "MIT",
                 "Silero VAD" to "MIT",
                 "Gemma 4 E2B (Google)" to "Apache-2.0",
-                "Qwen3 4B Instruct (Alibaba)" to "Apache-2.0",
-                "EXAONE 4.0 1.2B (LG AI Research)" to "EXAONE AI Model License (비상업)",
             ).forEach { (name, lic) ->
                 Row { Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall); Text(lic, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) }
             }

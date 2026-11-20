@@ -30,7 +30,7 @@ object ModelCatalog {
         url = "$HF/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin",
         sizeBytes = 264_464_607,
         kind = ModelSpec.Kind.STT,
-        note = "한국어 음성인식 · 녹음 시간의 약 0.3배",
+        note = "기본 모델 · 빠름 · 느린 기기의 실시간 인식과 통역 중 인식에 사용",
     )
 
     val VAD = ModelSpec(
@@ -54,6 +54,7 @@ object ModelCatalog {
         note = "정밀 인식 · 작은 목소리·숫자·직함 인식이 크게 좋아짐 · 회의 후 다시 인식하면 녹음 시간의 약 0.7배 소요 · 빠른 기기에서는 실시간 인식에도 사용",
     )
 
+    // ---- 이전 버전의 회의록·통역 모델 (v0.1.18부터 사용하지 않음, 받아 둔 파일은 설정에서 삭제 가능)
     val QWEN3_4B = ModelSpec(
         id = "qwen3-4b",
         title = "Qwen3 4B Instruct 2507 (Q4_0)",
@@ -61,7 +62,7 @@ object ModelCatalog {
         url = "$HF/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_0.gguf",
         sizeBytes = 2_375_773_280,
         kind = ModelSpec.Kind.LLM,
-        note = "세부 숫자를 더 많이 남김 · Gemma 4보다 느림 · Apache-2.0",
+        note = "더 이상 쓰지 않음 · 회의록과 통역은 Gemma 4가 합니다 · 삭제해 저장 공간을 확보하세요",
     )
 
     val EXAONE_1B = ModelSpec(
@@ -71,7 +72,7 @@ object ModelCatalog {
         url = "$HF/LGAI-EXAONE/EXAONE-4.0-1.2B-GGUF/resolve/main/EXAONE-4.0-1.2B-Q4_K_M.gguf",
         sizeBytes = 812_437_792,
         kind = ModelSpec.Kind.LLM,
-        note = "빠름 · 약 21 토큰/초 · 한국어 토큰 효율 우수 · 비상업 라이선스",
+        note = "더 이상 쓰지 않음 · 회의록과 통역은 Gemma 4가 합니다 · 삭제해 저장 공간을 확보하세요",
         assistantPrefix = "<think>\n\n</think>\n\n",
     )
 
@@ -89,14 +90,16 @@ object ModelCatalog {
         url = "$HF/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf",
         sizeBytes = 2_841_481_184,
         kind = ModelSpec.Kind.LLM,
-        note = "기본 · 빠름 · Qwen3보다 회의록 약 4배, 번역 약 2배 빠름 · 통역에도 사용 · Apache-2.0",
+        note = "회의록과 실시간 통역 · 약 2.8GB · Apache-2.0",
     )
 
-    val llms = listOf(GEMMA4_E2B, QWEN3_4B, EXAONE_1B)
-    /** 실시간 통역 모델 (권장). 없고 Qwen3만 있으면 Qwen3로 통역 (EXAONE은 영→한 번역이 되지 않음, 2026-11-17 비교) */
+    /** 회의록·통역 모델은 Gemma 4 하나 (2026-11-20: Qwen3·EXAONE 제거 — 품질 비슷하거나 낮고 느리며, EXAONE은 비상업 라이선스) */
+    val LLM = GEMMA4_E2B
+    val llms = listOf(GEMMA4_E2B)
     val INTERPRETER = GEMMA4_E2B
-    val INTERPRETER_FALLBACK = QWEN3_4B
-    val all = listOf(WHISPER, WHISPER_TURBO, VAD, QWEN3_4B, EXAONE_1B, GEMMA4_E2B)
+    /** 더 이상 쓰지 않는 모델: 파일이 남아 있으면 설정에서 삭제할 수 있게 보여 줌 */
+    val retired = listOf(QWEN3_4B, EXAONE_1B)
+    val all = listOf(WHISPER, WHISPER_TURBO, VAD, GEMMA4_E2B)
     /** 회의 후 정밀 인식 모델 */
     val REFINER = WHISPER_TURBO
 

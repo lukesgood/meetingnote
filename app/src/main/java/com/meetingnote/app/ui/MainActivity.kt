@@ -107,10 +107,6 @@ class MainActivity : ComponentActivity() {
             getSharedPreferences("device_check", MODE_PRIVATE).edit().clear().apply()
         }
         if (intent?.getBooleanExtra("device_check", false) == true) { intent.removeExtra("device_check"); MeetingEngine.runDeviceCheck() }
-        intent?.getStringExtra("llm")?.let { id ->
-            com.meetingnote.app.ModelCatalog.llms.firstOrNull { it.id == id }?.let { MeetingEngine.settings.llm = it }
-            intent.removeExtra("llm")
-        }
         intent?.getStringExtra("minutes_lang")?.let { MeetingEngine.settings.minutesLang = it; intent.removeExtra("minutes_lang") }
         if (intent?.hasExtra("refine") == true) { MeetingEngine.settings.refine = intent.getBooleanExtra("refine", true); intent.removeExtra("refine") }
         // 테스트: --es cpu_variant base|dp|auto (앱을 다시 시작해야 적용)

@@ -24,18 +24,14 @@ object DeviceCheck {
     // ---- 기준 기기(SD870, 스레드 4) 기기 점검 실측값 (2026-11-17, 2회 평균): 점검 결과를 실제 처리 시간으로 환산하는 데 사용
     /** 점검용 10초 음성의 처리 시간 / 음성 길이 */
     private const val REF_STT_RTF = 0.18
-    private val REF_LLM = mapOf(
-        ModelCatalog.QWEN3_4B.id to LlmBench(promptTps = 38.7, genTps = 7.3),
-        ModelCatalog.EXAONE_1B.id to LlmBench(promptTps = 99.0, genTps = 20.0),
-    )
+    /** 기기 점검 전 회의록 진행률 추정에 쓰는 Gemma 4 속도 (Redmi Note 13 Pro 앱 안 실측 52~105 / 5.2~6.7 tok/s의 대략값) */
+    private val DEFAULT_LLM = LlmBench(promptTps = 60.0, genTps = 6.0)
     /**
      * 회의 10분당 회의록 작업량(토큰) — 기준 기기 Qwen3 실측(10분당 258초, 프롬프트 70%)을 기준 속도로 나눈 값.
-     * 기준값이 없는 모델(Gemma 4)은 이 작업량과 실측 속도로 시간을 추정한다.
+     * 이 작업량과 실측 속도로 회의록 작성 시간을 추정한다.
      */
     private const val MINUTES_PROMPT_TOK_PER_10MIN = 6990.0
     private const val MINUTES_GEN_TOK_PER_10MIN = 565.0
-    /** 기준 기기에서 회의 10분당 회의록 작성 시간(초) — 7.6분 회의 실측 (Qwen3 196초, EXAONE 39초) */
-    private val REF_MINUTES_SEC_PER_10MIN = mapOf(ModelCatalog.QWEN3_4B.id to 258.0, ModelCatalog.EXAONE_1B.id to 51.0)
     /**
      * 통역 한 문장의 평균 토큰 수 — 기준 기기 Qwen3 실측(문장당 5.0초, 프롬프트 42%·생성 58%)을
      * 기준 속도(38.7/7.3 tok/s)로 나눈 값. 시스템 프롬프트는 캐시로 재사용돼 새로 처리하는 부분만 센다.
@@ -77,8 +73,11 @@ object DeviceCheck {
 
     private fun freeBytes() = MeetingEngine.models.dir.usableSpace
 
-    /** 모델을 메모리에 올릴 수 있는지 (Qwen3 약 3GB, EXAONE 약 1GB + 음성인식 0.5GB) */
-    fun ramOkFor(spec: ModelSpec) = totalRam >= if (spec == ModelCatalog.EXAONE_1B) RAM_4GB else RAM_6GB
+    /**
+     * 모델을 메모리에 올릴 수 있는지 (Gemma 4 E2B 약 2.8GB 파일, 일부만 메모리에 올라감 + 음성인식 0.5~1GB).
+     * 4~6GB 기기는 허용하되 '느리거나 종료될 수 있음'으로 안내 (4GB 기기 실측 없음).
+     */
+    fun ramOkFor(spec: ModelSpec) = totalRam >= RAM_4GB
 
     private fun gb(b: Long) = "%.1fGB".format(b / 1e9)
 
@@ -86,7 +85,7 @@ object DeviceCheck {
         val ram = when {
             totalRam >= RAM_6GB -> Item("메모리", Level.OK, "RAM ${gb(totalRam)}")
             totalRam >= RAM_4GB -> Item("메모리", Level.SLOW,
-                "RAM ${gb(totalRam)} — Qwen3와 실시간 통역은 어렵습니다. 회의록은 EXAONE을 쓰세요.")
+                "RAM ${gb(totalRam)} — 메모리가 적어 회의록·통역이 느리거나 앱이 종료될 수 있습니다.")
             else -> Item("메모리", Level.NO, "RAM ${gb(totalRam)} — 회의록 작성은 어렵고 녹취만 가능합니다.")
         }
         val free = freeBytes(); val need = missingModelBytes()
@@ -166,13 +165,7 @@ object DeviceCheck {
 
     /** 요약 모델의 처리 속도: 기기 점검 실측값, 없으면 기준 기기 값 */
     fun llmSpeed(spec: ModelSpec): LlmBench =
-        bench?.llm?.get(spec.id) ?: REF_LLM[spec.id] ?: LlmBench(30.0, 6.0)
-
-    /** 처리 시간 배율 (1 = 기준 기기와 같음, 2 = 두 배 걸림) */
-    private fun llmFactor(id: String, b: LlmBench, promptShare: Double): Double {
-        val ref = REF_LLM.getValue(id)
-        return promptShare * ref.promptTps / b.promptTps + (1 - promptShare) * ref.genTps / b.genTps
-    }
+        bench?.llm?.get(spec.id) ?: DEFAULT_LLM
 
     private fun minutesText(sec: Double) = if (sec < 90) "약 ${sec.toInt()}초" else "약 ${(sec / 60).toInt().coerceAtLeast(1)}분"
 
@@ -196,11 +189,11 @@ object DeviceCheck {
                     (if (interpretTurboOk(MeetingEngine.interpreterSpec())) " (통역 중에도 사용)" else " (통역 중에는 기본 모델)")
                 else "느려서 기본 모델 사용 (10초 음성에 ${"%.1f".format(t * 10)}초)")
         }
-        // 실시간 통역 (Gemma 4, 없으면 Qwen3)
+        // 실시간 통역 (Gemma 4)
         val q = MeetingEngine.interpreterSpec()
         val qb = b?.llm?.get(q.id)
         items += when {
-            !ramOkFor(q) -> Item("실시간 통역", Level.NO, "메모리가 부족합니다 (RAM 6GB 이상 필요).")
+            !ramOkFor(q) -> Item("실시간 통역", Level.NO, "메모리가 부족합니다 (RAM 4GB 이상 필요).")
             qb == null || rtf == null -> Item("실시간 통역", Level.UNKNOWN,
                 if (b == null) notRun else "${q.title.substringBefore(" (")}와 음성인식 모델을 받은 뒤 다시 점검해 주세요.")
             else -> {
@@ -213,16 +206,15 @@ object DeviceCheck {
                 }
             }
         }
-        // 회의록 (모델별)
+        // 회의록
         ModelCatalog.llms.forEach { spec ->
             val name = "회의록 · ${spec.title.substringBefore(" (").substringBefore(" Instruct")}"
             val lb = b?.llm?.get(spec.id)
             items += when {
-                !ramOkFor(spec) -> Item(name, Level.NO, "메모리가 부족합니다 (RAM ${if (spec == ModelCatalog.EXAONE_1B) "4" else "6"}GB 이상 필요).")
+                !ramOkFor(spec) -> Item(name, Level.NO, "메모리가 부족합니다 (RAM 4GB 이상 필요).")
                 lb == null -> Item(name, Level.UNKNOWN, if (b == null) notRun else "모델을 받은 뒤 다시 점검해 주세요.")
                 else -> {
-                    val perHour = REF_MINUTES_SEC_PER_10MIN[spec.id]?.let { it * 6 * llmFactor(spec.id, lb, 0.7) }
-                        ?: (MINUTES_PROMPT_TOK_PER_10MIN / lb.promptTps + MINUTES_GEN_TOK_PER_10MIN / lb.genTps) * 6
+                    val perHour = (MINUTES_PROMPT_TOK_PER_10MIN / lb.promptTps + MINUTES_GEN_TOK_PER_10MIN / lb.genTps) * 6
                     Item(name, if (perHour <= 40 * 60) Level.OK else Level.SLOW,
                         "1시간 회의 기준 ${minutesText(perHour)} (말이 많을수록 길어짐)")
                 }

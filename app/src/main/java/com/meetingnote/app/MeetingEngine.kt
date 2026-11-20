@@ -180,7 +180,7 @@ object MeetingEngine {
                     Log.i("DeviceCheck", "turbo rtf=%.3f".format(turboRtf))
                 }
                 val llm = mutableMapOf<String, DeviceCheck.LlmBench>()
-                for (spec in (ModelCatalog.llms + ModelCatalog.INTERPRETER).distinct().filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
+                for (spec in ModelCatalog.llms.filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
                     _checking.value = "${spec.title.substringBefore(" (")} 속도 측정 중…"
                     loadLlm(spec, nCtx = 2048).use { m ->
                         // 예열 (모델 파일을 메모리에 올림)
@@ -254,12 +254,8 @@ object MeetingEngine {
 
     fun missingSttModels(spec: ModelSpec = settings.whisper) = listOf(spec, ModelCatalog.VAD).filterNot { models.isReady(it) }
 
-    /** 통역 모델: Gemma 4(권장)가 있으면 Gemma 4, 없고 Qwen3만 있으면 Qwen3, 둘 다 없으면 Gemma 4(내려받기 안내용) */
-    fun interpreterSpec(): ModelSpec = when {
-        models.isReady(ModelCatalog.INTERPRETER) -> ModelCatalog.INTERPRETER
-        models.isReady(ModelCatalog.INTERPRETER_FALLBACK) -> ModelCatalog.INTERPRETER_FALLBACK
-        else -> ModelCatalog.INTERPRETER
-    }
+    /** 통역 모델 (Gemma 4) */
+    fun interpreterSpec(): ModelSpec = ModelCatalog.INTERPRETER
 
     private val interpreterMissingMessage get() =
         "실시간 통역에는 ${ModelCatalog.INTERPRETER.title.substringBefore(" (")} 모델이 필요합니다. 설정 > 통역에서 내려받거나 통역을 꺼 주세요."
@@ -770,12 +766,8 @@ object MeetingEngine {
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    var llm: ModelSpec
-        // 직접 고른 모델이 우선. 고른 적이 없으면 Gemma 4(기본) → 받아 둔 Qwen3 → Gemma 4(내려받기 안내) 순
-        get() = ModelCatalog.llms.firstOrNull { it.id == prefs.getString("llm", null) }
-            ?: listOf(ModelCatalog.GEMMA4_E2B, ModelCatalog.QWEN3_4B).firstOrNull { MeetingEngine.models.isReady(it) }
-            ?: ModelCatalog.GEMMA4_E2B
-        set(v) = prefs.edit().putString("llm", v.id).apply()
+    /** 회의록 모델 (Gemma 4 하나) */
+    val llm: ModelSpec get() = ModelCatalog.LLM
 
     /** 용어 사전: 회사명·인명·전문용어 (쉼표 구분). 음성인식 힌트와 회의록 표기 교정에 사용 */
     /** 음성인식 모델 (고정밀 turbo 옵션은 실사용 오인식이 많아 삭제) */
