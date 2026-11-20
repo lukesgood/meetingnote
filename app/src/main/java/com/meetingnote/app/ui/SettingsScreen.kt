@@ -128,7 +128,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text(
                     "기본(small)은 빠르지만 회의실처럼 마이크에서 먼 목소리는 오인식이 많습니다. 정밀(turbo)은 훨씬 정확하지만 " +
                         "약 3배 느려 큰 코어를 많이 씁니다. 자동은 기기 점검 결과로 정밀 모델을 쓸 수 있으면 씁니다. " +
-                        "통역 중에는 항상 기본 모델을 씁니다.\n" +
+                        "통역 중에는 번역과 함께 돌려도 충분히 빠를 때만 정밀 모델을 씁니다.\n" +
                         when {
                             !turboReady && liveModel != "small" -> "→ 정밀 모델이 없어 기본 모델을 씁니다. 아래에서 내려받으세요."
                             liveModel == "auto" && DeviceCheck.bench == null -> "→ 기기 점검 전이라 기본 모델을 씁니다."
@@ -203,11 +203,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onSelect = { llm = spec; settings.llm = spec },
                         onDelete = { confirmDelete = spec })
                 }
-                Hint("EXAONE은 비상업적 용도로만 사용할 수 있습니다. 업무·상업적 용도에는 Qwen3(Apache-2.0)를 쓰세요.")
+                Hint("EXAONE은 비상업적 용도로만 사용할 수 있습니다. 업무·상업적 용도에는 Qwen3(Apache-2.0)를 쓰세요.\n" +
+                    "Gemma 4는 통역 전용입니다(위 '통역' 항목에서 받기). 긴 회의의 회의록 형식이 무너지는 문제가 있어 회의록에는 쓰지 않습니다.")
             }
         }
         val vocabCard: @Composable () -> Unit = { VocabularyCard() }
-        val langCard: @Composable () -> Unit = { LanguageCard(tick) }
+        val langCard: @Composable () -> Unit = { LanguageCard(tick, busy = engine.busy, onDelete = { confirmDelete = it }) }
         val perfCard: @Composable () -> Unit = { DeviceCheckCard(tick, busy = engine.busy); PerformanceCard() }
         val storageCard: @Composable () -> Unit = { StorageCard(tick) }
         val aboutCard: @Composable () -> Unit = { AboutCard(onReport = { reporting = true }) }
@@ -343,7 +344,7 @@ private fun ModelOption(
 
 /** 통역(한국어 ↔ 영어)과 회의록 언어 */
 @Composable
-private fun LanguageCard(tick: Int) {
+private fun LanguageCard(tick: Int, busy: Boolean, onDelete: (ModelSpec) -> Unit) {
     val settings = MeetingEngine.settings
     var interpret by remember { mutableStateOf(settings.interpret) }
     var lang by remember { mutableStateOf(settings.minutesLang) }
@@ -356,16 +357,28 @@ private fun LanguageCard(tick: Int) {
             }
             Switch(interpret, { interpret = it; settings.interpret = it })
         }
+        // 통역 전용 모델은 통역을 끈 상태에서도 보이게 (미리 받아 둘 수 있도록)
+        val gemma = ModelCatalog.INTERPRETER
+        ModelOption(gemma, selected = null, tick = tick, busy = busy, onSelect = {}, onDelete = { onDelete(gemma) })
         if (interpret) {
-            val spec = ModelCatalog.INTERPRETER
+            val spec = remember(tick) { MeetingEngine.interpreterSpec() }
             val ready = remember(tick) { MeetingEngine.models.isReady(spec) }
+            val turbo = remember(tick) { MeetingEngine.liveSttSpec() == ModelCatalog.REFINER }
             Hint(
-                "번역은 회의록 요약 모델 설정과 상관없이 항상 ${spec.title.substringBefore(" (")}로 기기 안에서 합니다 " +
-                    "(EXAONE은 영어→한국어 번역 품질이 낮음). 녹음 중에도 모델이 메모리에 올라가 배터리 사용이 늘고, " +
-                    "문장이 끝난 뒤 번역이 뜨기까지 5초 정도 더 걸립니다."
+                "번역은 회의록 요약 모델 설정과 상관없이 통역 전용 모델로 기기 안에서 합니다. " +
+                    when {
+                        spec == gemma && ready -> "지금은 ${gemma.title.substringBefore(" (")}로 통역합니다."
+                        ready -> "${gemma.title.substringBefore(" (")}가 없어 ${spec.title.substringBefore(" (")}로 통역합니다. " +
+                            "${gemma.title.substringBefore(" (")}를 받으면 번역이 약 2배 빨라지고 숫자·고유명사가 더 정확합니다."
+                        else -> ""
+                    } +
+                    " 통역 중 실시간 인식은 " +
+                    (if (turbo) "정밀 모델을 씁니다(기기 점검 결과 번역과 함께 돌려도 충분히 빠름)."
+                     else "기본 모델을 씁니다. 통역 모델을 받은 뒤 기기 점검을 하면 정밀 모델을 쓸 수 있는지 판단합니다.") +
+                    " 녹음 중에도 모델이 메모리에 올라가 배터리 사용이 늘어납니다."
             )
             if (!ready) Text(
-                "⚠ ${spec.title.substringBefore(" (")} 모델이 없습니다. 위 '회의록 요약'에서 내려받아야 통역을 쓸 수 있습니다.",
+                "⚠ 통역 모델이 없습니다. 위에서 ${gemma.title.substringBefore(" (")}를 내려받아야 통역을 쓸 수 있습니다.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
             )
         }

@@ -1,4 +1,5 @@
 // JNI bridge for llama.cpp (on-device LLM summarization)
+#include <cstring>
 #include <jni.h>
 #include <android/log.h>
 #include <algorithm>
@@ -137,6 +138,19 @@ Java_com_meetingnote_llama_LlamaLib_nativeCountTokens(JNIEnv * env, jobject, jlo
 }
 
 // 모델 내장 채팅 템플릿으로 (system, user) 프롬프트를 구성. assistantPrefix는 응답 앞에 강제로 붙일 텍스트.
+// Gemma 4: llama_chat_apply_template의 내장 목록에 없음(<|turn> 형식) → 직접 구성.
+// GGUF의 jinja 템플릿과 같은 형식이며, 사고 모드는 켜지 않는다(시스템 턴에 <|think|>를 넣지 않음).
+static bool is_gemma4(const char * tmpl) { return tmpl && strstr(tmpl, "<|turn>") != nullptr; }
+static std::string gemma4_format(const std::vector<std::pair<std::string, std::string>> & msgs) {
+    std::string out;
+    for (const auto & m : msgs) {
+        const std::string role = m.first == "assistant" ? "model" : m.first;
+        out += "<|turn>" + role + "\n" + m.second + "<turn|>\n";
+    }
+    out += "<|turn>model\n";
+    return out;
+}
+
 JNIEXPORT jbyteArray JNICALL
 Java_com_meetingnote_llama_LlamaLib_nativeFormatChat(JNIEnv * env, jobject, jlong h,
         jstring system, jstring user, jstring assistantPrefix) {
@@ -148,6 +162,12 @@ Java_com_meetingnote_llama_LlamaLib_nativeFormatChat(JNIEnv * env, jobject, jlon
     msgs.push_back({"user", usr.c_str()});
 
     const char * tmpl = llama_model_chat_template(s->model, nullptr);
+    if (is_gemma4(tmpl)) {
+        std::vector<std::pair<std::string, std::string>> m;
+        if (!sys.empty()) m.emplace_back("system", sys);
+        m.emplace_back("user", usr);
+        return to_bytes(env, gemma4_format(m) + pre);
+    }
     std::vector<char> buf(usr.size() * 2 + sys.size() * 2 + 1024);
     int n = llama_chat_apply_template(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int) buf.size());
     if (n > (int) buf.size()) {
@@ -185,6 +205,11 @@ Java_com_meetingnote_llama_LlamaLib_nativeFormatMessages(JNIEnv * env, jobject, 
     for (jsize i = 0; i < n; ++i) msgs.push_back({r[i].c_str(), c[i].c_str()});
 
     const char * tmpl = llama_model_chat_template(s->model, nullptr);
+    if (is_gemma4(tmpl)) {
+        std::vector<std::pair<std::string, std::string>> m;
+        for (jsize i = 0; i < n; ++i) m.emplace_back(r[i], c[i]);
+        return to_bytes(env, gemma4_format(m) + jstr(env, assistantPrefix));
+    }
     std::vector<char> buf(total * 2 + 1024);
     int len = llama_chat_apply_template(tmpl, msgs.data(), msgs.size(), true, buf.data(), (int) buf.size());
     if (len > (int) buf.size()) {

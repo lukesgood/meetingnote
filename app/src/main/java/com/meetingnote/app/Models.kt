@@ -75,10 +75,26 @@ object ModelCatalog {
         assistantPrefix = "<think>\n\n</think>\n\n",
     )
 
+    /**
+     * 실시간 통역 전용 (2026-11-19 PC 비교, 17문장): Qwen3 4B보다 입력 처리 약 5배·생성 약 2배 빠르고
+     * 숫자(71억)·고유명사(두산)·'Pacific time'이 더 정확. 오인식으로 뜻이 불분명한 문장을 지어낸 경우가 1번 있음.
+     * 31분 회의록은 구간 메모를 그대로 옮기다 길이 한도에 걸려 형식이 무너져 회의록 모델로는 쓰지 않는다.
+     */
+    val GEMMA4_E2B = ModelSpec(
+        id = "gemma4-e2b",
+        title = "Gemma 4 E2B (Q4_0)",
+        fileName = "gemma-4-E2B-it-Q4_0.gguf",
+        url = "$HF/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf",
+        sizeBytes = 2_841_481_184,
+        kind = ModelSpec.Kind.LLM,
+        note = "실시간 통역용 · Qwen3보다 번역이 약 2배 빠르고 숫자·고유명사가 정확 · Apache-2.0",
+    )
+
     val llms = listOf(QWEN3_4B, EXAONE_1B)
-    /** 실시간 통역 모델: 요약 모델 설정과 무관하게 항상 Qwen3 (EXAONE은 영→한 번역이 되지 않음, 2026-11-17 비교) */
-    val INTERPRETER = QWEN3_4B
-    val all = listOf(WHISPER, WHISPER_TURBO, VAD, QWEN3_4B, EXAONE_1B)
+    /** 실시간 통역 모델 (권장). 없고 Qwen3만 있으면 Qwen3로 통역 (EXAONE은 영→한 번역이 되지 않음, 2026-11-17 비교) */
+    val INTERPRETER = GEMMA4_E2B
+    val INTERPRETER_FALLBACK = QWEN3_4B
+    val all = listOf(WHISPER, WHISPER_TURBO, VAD, QWEN3_4B, EXAONE_1B, GEMMA4_E2B)
     /** 회의 후 정밀 인식 모델 */
     val REFINER = WHISPER_TURBO
 

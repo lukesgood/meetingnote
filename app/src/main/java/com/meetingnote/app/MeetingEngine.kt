@@ -91,6 +91,9 @@ object MeetingEngine {
     private var whisper: WhisperContext? = null
     private var whisperSpec: ModelSpec? = null
 
+    private fun loadLlm(spec: ModelSpec, nCtx: Int = 4096): LlamaModel =
+        LlamaModel.load(models.file(spec).path, nCtx = nCtx, threads = settings.threads)
+
     /** 요청한 음성인식 모델을 불러옴. 다른 모델이 올라가 있으면 해제 후 교체 */
     private fun loadWhisper(spec: ModelSpec): WhisperContext {
         whisper?.let { if (whisperSpec == spec) return it }
@@ -177,9 +180,9 @@ object MeetingEngine {
                     Log.i("DeviceCheck", "turbo rtf=%.3f".format(turboRtf))
                 }
                 val llm = mutableMapOf<String, DeviceCheck.LlmBench>()
-                for (spec in ModelCatalog.llms.filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
+                for (spec in (ModelCatalog.llms + ModelCatalog.INTERPRETER).filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
                     _checking.value = "${spec.title.substringBefore(" (")} 속도 측정 중…"
-                    LlamaModel.load(models.file(spec).path, nCtx = 2048, threads = settings.threads).use { m ->
+                    loadLlm(spec, nCtx = 2048).use { m ->
                         // 예열 (모델 파일을 메모리에 올림)
                         m.generate(m.formatChat(null, "안녕하세요", spec.assistantPrefix), maxTokens = 2, temperature = 0f) { true }
                         val st = m.generate(m.formatChat(null, DeviceCheck.LLM_BENCH_TEXT, spec.assistantPrefix),
@@ -232,8 +235,12 @@ object MeetingEngine {
      * small은 실제 회의(원거리 마이크)에서 글자 오류가 많아 (2026-11-19 회의 36%) 가능하면 turbo를 쓴다.
      */
     fun liveSttSpec(): ModelSpec {
-        if (settings.interpret) return settings.whisper
         val turbo = ModelCatalog.REFINER
+        if (settings.interpret) {
+            // 통역 중: 번역 모델과 큰 코어를 나눠 쓰므로, 둘을 합친 부하가 기기 점검 기준 안일 때만 turbo
+            return if (settings.liveModel != "small" && models.isReady(turbo) &&
+                DeviceCheck.interpretTurboOk(interpreterSpec())) turbo else settings.whisper
+        }
         return when (settings.liveModel) {
             "small" -> settings.whisper
             "turbo" -> if (models.isReady(turbo)) turbo else settings.whisper
@@ -247,15 +254,22 @@ object MeetingEngine {
 
     fun missingSttModels(spec: ModelSpec = settings.whisper) = listOf(spec, ModelCatalog.VAD).filterNot { models.isReady(it) }
 
+    /** 통역 모델: Gemma 4(권장)가 있으면 Gemma 4, 없고 Qwen3만 있으면 Qwen3, 둘 다 없으면 Gemma 4(내려받기 안내용) */
+    fun interpreterSpec(): ModelSpec = when {
+        models.isReady(ModelCatalog.INTERPRETER) -> ModelCatalog.INTERPRETER
+        models.isReady(ModelCatalog.INTERPRETER_FALLBACK) -> ModelCatalog.INTERPRETER_FALLBACK
+        else -> ModelCatalog.INTERPRETER
+    }
+
     private val interpreterMissingMessage get() =
-        "실시간 통역에는 ${ModelCatalog.INTERPRETER.title.substringBefore(" (")} 모델이 필요합니다. 설정에서 내려받거나 통역을 꺼 주세요."
+        "실시간 통역에는 ${ModelCatalog.INTERPRETER.title.substringBefore(" (")} 모델이 필요합니다. 설정 > 통역에서 내려받거나 통역을 꺼 주세요."
 
     /** 시작 전에 필요한 모델 확인: 없으면 오류 상태로 두고 false */
     private fun checkModels(sttSpec: ModelSpec): Boolean {
         val missing = missingSttModels(sttSpec)
         val msg = when {
             missing.isNotEmpty() -> "음성인식 모델이 필요합니다: ${missing.joinToString { it.title }}"
-            settings.interpret && !models.isReady(ModelCatalog.INTERPRETER) -> interpreterMissingMessage
+            settings.interpret && !models.isReady(interpreterSpec()) -> interpreterMissingMessage
             else -> return true
         }
         _state.value = EngineState(Phase.ERROR, message = msg)
@@ -324,15 +338,16 @@ object MeetingEngine {
         }
     }
 
-    /** 통역 준비: 통역 모델(항상 Qwen3)을 불러와 번역기 생성 (추론 스레드에서 호출) */
+    /** 통역 준비: 통역 모델(interpreterSpec)을 불러와 번역기 생성 (추론 스레드에서 호출) */
     private fun startInterpreter(): Translator {
-        val spec = ModelCatalog.INTERPRETER
+        val spec = interpreterSpec()
         require(models.isReady(spec)) { interpreterMissingMessage }
         val prevMessage = _state.value.message
         _state.update { it.copy(message = "통역 모델 불러오는 중…") }
         ErrorReporter.trail("통역 모델 로드: ${spec.id}")
         val llm = sharedLlm?.takeIf { sharedLlmSpec == spec }
-            ?: LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads).also { sharedLlm = it; sharedLlmSpec = spec }
+            ?: run { releaseSharedLlm(); loadLlm(spec) }
+                .also { sharedLlm = it; sharedLlmSpec = spec }
         return Translator(llm, spec, CoroutineScope(inference)) { tr -> updateLine(tr) }
             .also { translator = it; _state.update { s -> s.copy(interpreting = true, message = prevMessage) } }
     }
@@ -639,7 +654,7 @@ object MeetingEngine {
             ErrorReporter.trail("요약 모델 로드: ${spec.id}, 녹취 ${transcript.size}문장, 스레드 ${settings.threads}")
             // 통역용으로 이미 불러 둔 모델이 있으면 재사용 (다시 불러오는 시간 절약)
             llm = sharedLlm?.takeIf { sharedLlmSpec == spec }?.also { sharedLlm = null; sharedLlmSpec = null }
-                ?: run { releaseSharedLlm(); LlamaModel.load(models.file(spec).path, nCtx = 4096, threads = settings.threads) }
+                ?: run { releaseSharedLlm(); loadLlm(spec) }
             val speed = DeviceCheck.llmSpeed(spec)
             val s = Summarizer(llm, spec, vocabulary = settings.vocabulary, lang = settings.minutesLang,
                 tracker = SummaryTracker(speed.promptTps, speed.genTps)).also { summarizer = it }

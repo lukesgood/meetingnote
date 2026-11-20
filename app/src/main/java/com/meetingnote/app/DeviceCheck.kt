@@ -30,8 +30,13 @@ object DeviceCheck {
     )
     /** 기준 기기에서 회의 10분당 회의록 작성 시간(초) — 7.6분 회의 실측 (Qwen3 196초, EXAONE 39초) */
     private val REF_MINUTES_SEC_PER_10MIN = mapOf(ModelCatalog.QWEN3_4B.id to 258.0, ModelCatalog.EXAONE_1B.id to 51.0)
-    /** 기준 기기에서 통역 한 문장 처리 시간(초) — 프롬프트 처리 42%, 생성 58% */
-    private const val REF_TRANSLATE_SEC = 5.0
+    /**
+     * 통역 한 문장의 평균 토큰 수 — 기준 기기 Qwen3 실측(문장당 5.0초, 프롬프트 42%·생성 58%)을
+     * 기준 속도(38.7/7.3 tok/s)로 나눈 값. 시스템 프롬프트는 캐시로 재사용돼 새로 처리하는 부분만 센다.
+     * 기준값이 없는 모델(Gemma 4)도 실측 속도만으로 문장당 시간을 추정할 수 있다.
+     */
+    private const val TRANSLATE_PROMPT_TOK = 81.0
+    private const val TRANSLATE_GEN_TOK = 21.0
 
     private const val GB = 1_000_000_000L
     /** totalMem은 표기 용량보다 작게 나옴 (8GB → 약 7.4GB) */
@@ -61,13 +66,13 @@ object DeviceCheck {
 
     /** 통역·녹취에 필요한데 아직 없는 모델 용량 */
     private fun missingModelBytes() =
-        listOf(ModelCatalog.WHISPER, ModelCatalog.VAD, ModelCatalog.INTERPRETER)
+        listOf(ModelCatalog.WHISPER, ModelCatalog.VAD, MeetingEngine.interpreterSpec())
             .filterNot { MeetingEngine.models.isReady(it) }.sumOf { it.sizeBytes }
 
     private fun freeBytes() = MeetingEngine.models.dir.usableSpace
 
     /** 모델을 메모리에 올릴 수 있는지 (Qwen3 약 3GB, EXAONE 약 1GB + 음성인식 0.5GB) */
-    fun ramOkFor(spec: ModelSpec) = totalRam >= if (spec == ModelCatalog.QWEN3_4B) RAM_6GB else RAM_4GB
+    fun ramOkFor(spec: ModelSpec) = totalRam >= if (spec == ModelCatalog.EXAONE_1B) RAM_4GB else RAM_6GB
 
     private fun gb(b: Long) = "%.1fGB".format(b / 1e9)
 
@@ -135,6 +140,24 @@ object DeviceCheck {
     const val TURBO_SMALL_RATIO = 3.0
     const val TURBO_LIVE_MAX_RTF = 0.7
 
+    /** 통역 한 문장 처리 시간(초): 해당 모델의 실측 속도 기준, 실측이 없으면 null */
+    fun translateSec(spec: ModelSpec): Double? {
+        val lb = bench?.llm?.get(spec.id) ?: return null
+        return TRANSLATE_PROMPT_TOK / lb.promptTps + TRANSLATE_GEN_TOK / lb.genTps
+    }
+
+    /** 약 8초에 한 문장이 나온다고 보고, 음성인식과 번역이 추론 스레드 하나를 나눠 쓰는 부하 (1을 넘으면 밀림) */
+    private fun interpretLoad(sttRtf: Double, sec: Double) = sttRtf + sec / 8.0
+    /** 발열로 느려질 여유를 남긴 통역 부하 상한 */
+    private const val INTERPRET_MAX_LOAD = 0.85
+
+    /** 통역 중에도 실시간 인식에 turbo를 써도 되는지 (turbo와 통역 모델 모두 실측이 있어야 함) */
+    fun interpretTurboOk(interpreter: ModelSpec): Boolean {
+        val t = bench?.turboRtf ?: return false
+        val sec = translateSec(interpreter) ?: return false
+        return interpretLoad(t, sec) <= INTERPRET_MAX_LOAD
+    }
+
     /** 요약 모델의 처리 속도: 기기 점검 실측값, 없으면 기준 기기 값 */
     fun llmSpeed(spec: ModelSpec): LlmBench =
         bench?.llm?.get(spec.id) ?: REF_LLM[spec.id] ?: LlmBench(30.0, 6.0)
@@ -163,22 +186,22 @@ object DeviceCheck {
         // 실시간 녹취에 정밀 모델(turbo)을 쓸 수 있는지 (느려도 small로 녹취하므로 문제 항목은 아님)
         b?.turboRtf?.let { t ->
             items += Item("실시간 녹취 · 정밀 모델", Level.OK,
-                if (t <= TURBO_LIVE_MAX_RTF) "사용 · 10초 음성에 ${"%.1f".format(t * 10)}초 (통역 중에는 기본 모델)"
+                if (t <= TURBO_LIVE_MAX_RTF) "사용 · 10초 음성에 ${"%.1f".format(t * 10)}초" +
+                    (if (interpretTurboOk(MeetingEngine.interpreterSpec())) " (통역 중에도 사용)" else " (통역 중에는 기본 모델)")
                 else "느려서 기본 모델 사용 (10초 음성에 ${"%.1f".format(t * 10)}초)")
         }
-        // 실시간 통역 (항상 Qwen3)
-        val q = ModelCatalog.INTERPRETER
+        // 실시간 통역 (Gemma 4, 없으면 Qwen3)
+        val q = MeetingEngine.interpreterSpec()
         val qb = b?.llm?.get(q.id)
         items += when {
             !ramOkFor(q) -> Item("실시간 통역", Level.NO, "메모리가 부족합니다 (RAM 6GB 이상 필요).")
             qb == null || rtf == null -> Item("실시간 통역", Level.UNKNOWN,
                 if (b == null) notRun else "${q.title.substringBefore(" (")}와 음성인식 모델을 받은 뒤 다시 점검해 주세요.")
             else -> {
-                val sec = REF_TRANSLATE_SEC * llmFactor(q.id, qb, 0.42)
-                // 약 8초에 한 문장이 나온다고 보고, 음성인식과 번역이 한 스레드를 나눠 쓰는 부하
-                val load = rtf + sec / 8.0
+                val sec = TRANSLATE_PROMPT_TOK / qb.promptTps + TRANSLATE_GEN_TOK / qb.genTps
+                val load = interpretLoad(rtf, sec)
                 when {
-                    load <= 0.85 -> Item("실시간 통역", Level.OK, "가능 · 문장당 약 ${"%.0f".format(sec)}초")
+                    load <= INTERPRET_MAX_LOAD -> Item("실시간 통역", Level.OK, "가능 · 문장당 약 ${"%.0f".format(sec)}초")
                     load <= 1.2 -> Item("실시간 통역", Level.SLOW, "느림 · 문장당 약 ${"%.0f".format(sec)}초 (말이 빠르면 번역이 밀림)")
                     else -> Item("실시간 통역", Level.NO, "번역이 말 속도를 따라가지 못합니다 (문장당 약 ${"%.0f".format(sec)}초).")
                 }
