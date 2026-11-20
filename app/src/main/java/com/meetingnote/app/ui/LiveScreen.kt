@@ -138,6 +138,9 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                                 (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        if (s.phase == Phase.RECORDING) s.liveNotice?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        }
                         if (s.phase == Phase.ERROR) {
                             Text(s.message ?: "", color = MaterialTheme.colorScheme.error)
                             var reporting by remember { mutableStateOf(false) }

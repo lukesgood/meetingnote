@@ -206,6 +206,9 @@ object DeviceCheck {
                 }
             }
         }
+        // 그래픽 칩·AI 칩 (정보 항목)
+        if (GpuSupport.renderer.contains("Adreno") || GpuSupport.engineLoaded || GpuSupport.npuSupported)
+            items += Item("그래픽 칩 · AI 칩", if (GpuSupport.useGpu) Level.OK else Level.UNKNOWN, GpuSupport.statusText())
         // 회의록
         ModelCatalog.llms.forEach { spec ->
             val name = "회의록 · ${spec.title.substringBefore(" (").substringBefore(" Instruct")}"
@@ -249,7 +252,10 @@ object DeviceCheck {
                 " turbo ${x.turboRtf?.let { "%.2f".format(it) } ?: "-"}x, " +
                 x.llm.entries.joinToString(", ") { (k, v) -> "$k ${"%.0f".format(v.promptTps)}/${"%.1f".format(v.genTps)} tok/s" }
         } ?: " · 실측 없음"
-        return "$dot$i8$bt"
+        val gpu = " · 엔진 ${com.meetingnote.llama.LlamaNative.loaded ?: "-"} · GPU ${GpuSupport.renderer.ifEmpty { "?" }}" +
+            " · SoC ${GpuSupport.soc.ifEmpty { "?" }}" +
+            (if (GpuSupport.engineLoaded) " (가속 ${GpuSupport.accelName(GpuSupport.accel)})" else "") + (if (GpuSupport.failed) " (실패 기록)" else "")
+        return "$dot$i8$bt$gpu"
     }
 
     // ------------------------------------------------------------ 실측 자료

@@ -42,6 +42,7 @@ dependencies {
     implementation(project(":native-llama"))
     runtimeOnly(project(":native-whisper-base"))
     runtimeOnly(project(":native-llama-base"))
+    runtimeOnly(project(":native-llama-gpu"))
 
     val composeBom = platform("androidx.compose:compose-bom:2025.06.01")
     implementation(composeBom)

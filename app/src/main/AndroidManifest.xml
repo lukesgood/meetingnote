@@ -17,6 +17,9 @@
         android:largeHeap="true"
         android:supportsRtl="true">
 
+        <!-- 그래픽 칩 판 엔진이 쓰는 제조사 OpenCL 라이브러리 (Android 12+에서 선언 필요, 없는 기기도 설치 가능) -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <activity
             android:name=".ui.MainActivity"
             android:launchMode="singleTop"

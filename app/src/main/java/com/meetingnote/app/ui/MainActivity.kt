@@ -106,6 +106,9 @@ class MainActivity : ComponentActivity() {
             com.meetingnote.app.DeviceCheck.bench = null
             getSharedPreferences("device_check", MODE_PRIVATE).edit().clear().apply()
         }
+        if (intent?.hasExtra("live_fallback_ms") == true) {   // 테스트: 정밀 모델 → 기본 모델 자동 전환 기준
+            MeetingEngine.liveFallbackBacklogMs = intent.getLongExtra("live_fallback_ms", 40_000L); intent.removeExtra("live_fallback_ms")
+        }
         if (intent?.getBooleanExtra("device_check", false) == true) { intent.removeExtra("device_check"); MeetingEngine.runDeviceCheck() }
         intent?.getStringExtra("minutes_lang")?.let { MeetingEngine.settings.minutesLang = it; intent.removeExtra("minutes_lang") }
         if (intent?.hasExtra("refine") == true) { MeetingEngine.settings.refine = intent.getBooleanExtra("refine", true); intent.removeExtra("refine") }

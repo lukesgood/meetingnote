@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import androidx.core.content.ContextCompat
 import com.meetingnote.llama.LlamaModel
+import com.meetingnote.llama.GenerationStats
 import com.meetingnote.whisper.WhisperContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,8 @@ data class EngineState(
     val lines: List<TranscriptLine> = emptyList(),
     /** 아직 인식되지 않은 녹음 길이 */
     val sttBacklogMs: Long = 0,
+    /** 녹음 중 알림 (예: 정밀 모델이 밀려 기본 모델로 바꿈) */
+    val liveNotice: String? = null,
     val lastRtf: Double? = null,
     val summaryText: String = "",
     val summaryStage: String = "",
@@ -92,11 +95,22 @@ object MeetingEngine {
     private var whisperSpec: ModelSpec? = null
 
     /** Gemma 4는 보조 모델(MTP)이 있으면 추측 생성으로 불러옴 (같은 품질, 생성 약 1.4~2배) */
-    private fun loadLlm(spec: ModelSpec, nCtx: Int = 4096): LlamaModel {
+    private fun loadLlm(spec: ModelSpec, nCtx: Int = 4096, accel: Int = GpuSupport.accel): LlamaModel {
         val draft = ModelCatalog.GEMMA4_MTP.takeIf { spec == ModelCatalog.GEMMA4_E2B && settings.speculative && models.isReady(it) }
-        return LlamaModel.load(models.file(spec).path, nCtx = nCtx, threads = settings.threads,
-            draftPath = draft?.let { models.file(it).path })
+        return GpuSupport.guard {
+            LlamaModel.load(models.file(spec).path, nCtx = nCtx, threads = settings.threads,
+                draftPath = draft?.let { models.file(it).path }, accel = accel)
+        }
     }
+
+    /** 기기 점검용 LLM 속도 측정 (예열 후 회의 녹취 요약 입력으로 48토큰 생성) */
+    private fun benchLlm(spec: ModelSpec, accel: Int): GenerationStats =
+        GpuSupport.guard {
+            loadLlm(spec, nCtx = 2048, accel = accel).use { m ->
+                m.generate(m.formatChat(null, "안녕하세요", spec.assistantPrefix), maxTokens = 2, temperature = 0f) { true }
+                m.generate(m.formatChat(null, DeviceCheck.LLM_BENCH_TEXT, spec.assistantPrefix), maxTokens = 48, temperature = 0f) { true }
+            }
+        }
 
     /** 요청한 음성인식 모델을 불러옴. 다른 모델이 올라가 있으면 해제 후 교체 */
     private fun loadWhisper(spec: ModelSpec): WhisperContext {
@@ -111,6 +125,7 @@ object MeetingEngine {
 
     fun init(context: Context) {
         app = context.applicationContext
+        GpuSupport.init(app)   // 엔진(llama)을 처음 불러오기 전에 그래픽 칩 판을 쓸지 정함
         repo = MeetingRepository(app)
         models = ModelStore(app)
         settings = Settings(app)
@@ -191,17 +206,29 @@ object MeetingEngine {
                 val llm = mutableMapOf<String, DeviceCheck.LlmBench>()
                 for (spec in ModelCatalog.llms.filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
                     _checking.value = "${spec.title.substringBefore(" (")} 속도 측정 중…"
-                    loadLlm(spec, nCtx = 2048).use { m ->
-                        // 예열 (모델 파일을 메모리에 올림)
-                        m.generate(m.formatChat(null, "안녕하세요", spec.assistantPrefix), maxTokens = 2, temperature = 0f) { true }
-                        val st = m.generate(m.formatChat(null, DeviceCheck.LLM_BENCH_TEXT, spec.assistantPrefix),
-                            maxTokens = 48, temperature = 0f) { true }
-                        if (!inForeground()) throw bg
-                        if (st.promptMs > 0 && st.genMs > 0 && st.genTokens >= 8) {
-                            llm[spec.id] = DeviceCheck.LlmBench(st.promptTps, st.genTps)
+                    var st = benchLlm(spec, accel = GpuSupport.CPU)
+                    if (!inForeground()) throw bg
+                    Log.i("DeviceCheck", "${spec.id} prompt ${st.promptTokens}tok/${st.promptMs}ms gen ${st.genTokens}tok/${st.genMs}ms " +
+                        "-> %.1f / %.2f tok/s".format(st.promptTps, st.genTps))
+                    // 가속 판 엔진이면 지원하는 그래픽 칩·AI 칩으로도 재서, CPU보다 확실히(10% 이상) 빠른 것 중 가장 빠른 장치를 쓴다
+                    if (GpuSupport.engineLoaded) {
+                        val cpuMs = st.promptMs + st.genMs
+                        var best = GpuSupport.CPU; var bestMs = cpuMs * 0.9; var bestSt = st
+                        val cands = listOfNotNull(GpuSupport.GPU.takeIf { GpuSupport.supported }, GpuSupport.NPU.takeIf { GpuSupport.npuSupported })
+                        for (a in cands) {
+                            _checking.value = "${spec.title.substringBefore(" (")} ${GpuSupport.accelName(a)} 속도 측정 중…"
+                            val g = runCatching { benchLlm(spec, accel = a) }.onFailure { Log.e("DeviceCheck", "accel $a bench failed", it) }.getOrNull()
+                            if (!inForeground()) throw bg
+                            val ms = g?.let { it.promptMs + it.genMs }
+                            Log.i("DeviceCheck", "${GpuSupport.accelName(a)}: ${g?.let { "prompt %.1f / gen %.2f tok/s, %dms".format(it.promptTps, it.genTps, ms) } ?: "failed"} (cpu ${cpuMs}ms)")
+                            ErrorReporter.trail("${GpuSupport.accelName(a)} 점검: ${ms ?: "실패"}ms (CPU ${cpuMs}ms)")
+                            if (g != null && g.genTokens >= 8 && ms!! < bestMs) { best = a; bestMs = ms.toDouble(); bestSt = g }
                         }
-                        Log.i("DeviceCheck", "${spec.id} prompt ${st.promptTokens}tok/${st.promptMs}ms gen ${st.genTokens}tok/${st.genMs}ms " +
-                            "-> %.1f / %.2f tok/s".format(st.promptTps, st.genTps))
+                        GpuSupport.accel = best
+                        st = bestSt
+                    }
+                    if (st.promptMs > 0 && st.genMs > 0 && st.genTokens >= 8) {
+                        llm[spec.id] = DeviceCheck.LlmBench(st.promptTps, st.genTps)
                     }
                 }
                 DeviceCheck.bench = DeviceCheck.Bench(rtf, llm, System.currentTimeMillis(), settings.threads, turboRtf)
@@ -257,6 +284,34 @@ object MeetingEngine {
         }
     }
 
+    private var slowChunks = 0
+
+    /**
+     * 정밀 모델(turbo)로 실시간 인식 중 처리가 계속 밀리면(인식 대기 40초 초과가 조각 2개 연속) 기본 모델로 바꾼다.
+     * 발열로 느려지는 긴 회의 대비. 녹음 중 화면만 덜 정확해지고, 회의 후 정밀 인식으로 최종 녹취록은 그대로 정확하다.
+     * 추론 스레드(조각 처리 콜백)에서 호출된다.
+     */
+    private fun fallbackIfBehind(meetingId: String, backlogMs: Long) {
+        val t = transcriber ?: return
+        if (liveSpec != ModelCatalog.REFINER) return
+        slowChunks = if (backlogMs > liveFallbackBacklogMs) slowChunks + 1 else 0
+        if (slowChunks < 2) return
+        slowChunks = 0
+        val small = settings.whisper
+        if (!models.isReady(small)) return
+        runCatching {
+            val ctx = WhisperContext.load(models.file(small).path)
+            t.switchModel(ctx) { old -> old.close() }
+            whisper = ctx; whisperSpec = small; liveSpec = small
+            repo.get(meetingId)?.let { repo.save(it.copy(sttModel = small.title)) }
+            _state.update { it.copy(liveNotice = "인식이 밀려 기본 모델로 바꿨습니다. 회의 후 정밀 인식으로 녹취록을 다시 만듭니다.") }
+            Log.i(TAG, "live STT fell behind (${backlogMs / 1000}s) -> ${small.id}")
+            ErrorReporter.trail("실시간 인식 기본 모델로 전환 (인식 대기 ${backlogMs / 1000}초)")
+        }.onFailure { Log.e(TAG, "live fallback failed", it) }
+    }
+    /** 전환 기준 (테스트: --el live_fallback_ms 0 으로 낮춰 바로 전환되게 할 수 있음, 저장하지 않음) */
+    @Volatile var liveFallbackBacklogMs = 40_000L
+
     /** 이번 녹음의 실시간 인식 모델 (정밀 인식 생략 판단용) */
     var liveSpec: ModelSpec? = null
         private set
@@ -300,7 +355,7 @@ object MeetingEngine {
                 recordedSamples = 0; processedMs = 0
                 val t = StreamingTranscriber(
                     scope = CoroutineScope(inference),
-                    whisper = w,
+                    initialWhisper = w,
                     vadPath = models.file(ModelCatalog.VAD).path,
                     threads = settings.threads,
                     vocabulary = settings.vocabulary,
@@ -309,14 +364,17 @@ object MeetingEngine {
                     onLines = { lines -> appendLines(lines) },
                     onChunkDone = { audioMs, procMs ->
                         processedMs += audioMs
+                        val backlog = (recordedSamples * 1000 / AudioRecorder.SAMPLE_RATE - processedMs).coerceAtLeast(0)
                         _state.update {
                             it.copy(
                                 lastRtf = if (procMs > 0) procMs.toDouble() / audioMs else it.lastRtf,
-                                sttBacklogMs = (recordedSamples * 1000 / AudioRecorder.SAMPLE_RATE - processedMs).coerceAtLeast(0),
+                                sttBacklogMs = backlog,
                             )
                         }
+                        fallbackIfBehind(meeting.id, backlog)
                     },
                 )
+                slowChunks = 0
                 transcriber = t
                 scopeAnalyzer = ScopeAnalyzer().also { it.timeDivIndex = settings.scopeTimeDiv }; _scope.value = null
                 val r = AudioRecorder(
@@ -486,7 +544,7 @@ object MeetingEngine {
                 repo.get(meetingId)?.let { repo.save(it.copy(durationMs = totalMs, recording = false, recovered = false, sttModel = sttSpec.title)) }
                 processedMs = 0
                 val t = StreamingTranscriber(
-                    scope = CoroutineScope(inference), whisper = w,
+                    scope = CoroutineScope(inference), initialWhisper = w,
                     vadPath = models.file(ModelCatalog.VAD).path, threads = settings.threads,
                     vocabulary = settings.vocabulary,
                     language = if (settings.interpret) "" else "ko",

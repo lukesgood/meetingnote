@@ -9,6 +9,7 @@
 
 #include "llama.h"
 #include "ggml-cpu.h"
+#include "ggml-backend.h"
 #include "common.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -194,13 +195,37 @@ jstring generate_spec(JNIEnv * env, Session * s, const std::vector<llama_token> 
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring modelPath, jint nCtx, jint threads, jstring draftPath) {
+Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring modelPath, jint nCtx, jint threads, jstring draftPath, jint accel) {
     llama_log_set(log_cb, nullptr);
     llama_backend_init();
 
     auto path = jstr(env, modelPath);
     llama_model_params mp = llama_model_default_params();
-    mp.n_gpu_layers = 0;
+    // 가속 판(그래픽 칩·AI 칩): 기기 점검에서 고른 장치에 모든 레이어를 올림. accel 0=CPU, 1=그래픽 칩, 2=AI 칩
+    int gpu_layers = 0;
+    ggml_backend_dev_t accel_devs[2] = { nullptr, nullptr };
+#ifdef MN_GPU
+    llama_backend_init();
+    if (accel > 0) {
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            ggml_backend_dev_t d = ggml_backend_dev_get(i);
+            const std::string name = ggml_backend_dev_name(d);
+            const bool is_npu = name.rfind("HTP", 0) == 0;
+            const bool is_gpu = ggml_backend_dev_type(d) == GGML_BACKEND_DEVICE_TYPE_GPU && !is_npu;
+            if ((accel == 1 && is_gpu) || (accel == 2 && is_npu)) { accel_devs[0] = d; break; }
+        }
+        if (accel_devs[0]) {
+            mp.devices = accel_devs;
+            gpu_layers = 999;
+            LOGI("accelerator: %s (%s)", ggml_backend_dev_name(accel_devs[0]), ggml_backend_dev_description(accel_devs[0]));
+        } else {
+            LOGI("accelerator %d not available, using CPU", (int) accel);
+        }
+    }
+#else
+    (void) accel;
+#endif
+    mp.n_gpu_layers = gpu_layers;
     llama_model * model = llama_model_load_from_file(path.c_str(), mp);
     if (!model) { LOGE("failed to load %s", path.c_str()); return 0; }
 
@@ -241,6 +266,8 @@ Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring mo
             p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
             p.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
             p.speculative.draft.mparams.path = dpath;
+            p.n_gpu_layers = gpu_layers;
+            p.speculative.draft.n_gpu_layers = gpu_layers;
             p.speculative.draft.cpuparams.n_threads = threads;
             p.speculative.draft.cpuparams_batch.n_threads = threads;
             common_params pd = common_base_params_to_speculative(p);
@@ -476,6 +503,22 @@ Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong 
                        std::to_string(n_gen) + "," + std::to_string((t2 - t1) / 1000) + "," + std::to_string(common);
     LOGI("perf %s", perf.c_str());
     return env->NewStringUTF(perf.c_str());
+}
+
+/** 이 판에서 쓸 수 있는 그래픽 칩 이름 (그래픽 칩 판이 아니거나 없으면 빈 문자열) */
+JNIEXPORT jstring JNICALL
+Java_com_meetingnote_llama_LlamaLib_nativeGpuName(JNIEnv * env, jobject) {
+    std::string name;
+#ifdef MN_GPU
+    llama_backend_init();
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t d = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(d) == GGML_BACKEND_DEVICE_TYPE_CPU) continue;
+        if (!name.empty()) name += ", ";
+        name += std::string(ggml_backend_dev_name(d)) + "=" + ggml_backend_dev_description(d);
+    }
+#endif
+    return env->NewStringUTF(name.c_str());
 }
 
 JNIEXPORT jstring JNICALL

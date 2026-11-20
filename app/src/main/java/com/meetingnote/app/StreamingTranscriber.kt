@@ -30,7 +30,7 @@ const val REFINE_VAD_PAD_MS = 150
  */
 class StreamingTranscriber(
     private val scope: CoroutineScope,
-    private val whisper: WhisperContext,
+    initialWhisper: WhisperContext,
     private val vadPath: String?,
     private val threads: Int,
     vocabulary: String = "",
@@ -42,6 +42,16 @@ class StreamingTranscriber(
     private val onChunkDone: (audioMs: Long, procMs: Long) -> Unit,
 ) {
     private val sr = AudioRecorder.SAMPLE_RATE
+    /** 지금 인식에 쓰는 모델. 녹음 중 바꿀 수 있음 (정밀 모델이 밀리면 기본 모델로) */
+    @Volatile private var whisper: WhisperContext = initialWhisper
+    @Volatile private var pendingSwap: Pair<WhisperContext, (WhisperContext) -> Unit>? = null
+
+    /**
+     * 다음 조각부터 다른 모델로 인식. 지금 처리 중인 조각이 끝난 뒤 바꾸고,
+     * 바뀐 뒤 이전 모델을 onReplaced로 돌려준다 (해제는 호출한 쪽에서).
+     */
+    fun switchModel(next: WhisperContext, onReplaced: (WhisperContext) -> Unit) { pendingSwap = next to onReplaced }
+
     /**
      * 발화 단위 분할: 말소리가 나온 뒤 0.5초 이상 쉬면 그 쉼의 가운데에서 자른다.
      * 최소 4초(너무 짧으면 문맥 부족), 최대 15초(그 안에서 가장 조용한 곳). 기존 25~30초 고정 분할 대비 지연 단축.
@@ -77,6 +87,10 @@ class StreamingTranscriber(
     val pendingChunks get() = pending.get()
     private val worker: Job = scope.launch {
         for ((offset, pcm, floor) in queue) {
+            pendingSwap?.let { (next, onReplaced) ->
+                pendingSwap = null
+                val old = whisper; whisper = next; onReplaced(old)
+            }
             try { process(offset, pcm, floor) } finally { pending.decrementAndGet() }
             kotlinx.coroutines.yield()   // 같은 추론 스레드의 번역 작업이 끼어들 수 있게
         }
@@ -116,6 +130,8 @@ class StreamingTranscriber(
         synchronized(this) { if (len > 0) emit(len) }
         queue.close()
         worker.join()
+        // 바꾸기로 했지만 남은 조각이 없어 적용되지 않은 경우: 이전 모델을 돌려줘 해제되게 함
+        pendingSwap?.let { (next, onReplaced) -> pendingSwap = null; val old = whisper; whisper = next; onReplaced(old) }
     }
 
     private fun findCut(): Int {

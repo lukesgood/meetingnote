@@ -13,3 +13,6 @@ build-bench/
 *.jks
 third_party/OpenCL-*/
 dist/
+build-accel/
+native-llama-gpu/prebuilt/
+app/src/main/assets/htp/

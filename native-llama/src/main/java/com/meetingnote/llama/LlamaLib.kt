@@ -64,8 +64,9 @@ class LlamaModel private constructor(private var handle: Long) : AutoCloseable {
 
     companion object {
         /** @param draftPath 추측 생성용 보조 모델(Gemma 4 MTP) 경로. 없으면 일반 생성 */
-        fun load(path: String, nCtx: Int = 4096, threads: Int = 4, draftPath: String? = null): LlamaModel {
-            val h = LlamaLib.nativeLoad(path, nCtx, threads, draftPath)
+        /** @param accel 0=CPU, 1=그래픽 칩, 2=AI 칩 — 가속 판 엔진을 불러온 경우에만 의미 있음 */
+        fun load(path: String, nCtx: Int = 4096, threads: Int = 4, draftPath: String? = null, accel: Int = 0): LlamaModel {
+            val h = LlamaLib.nativeLoad(path, nCtx, threads, draftPath, if (LlamaNative.loaded == "gpu") accel else 0)
             require(h != 0L) { "LLM 모델을 불러오지 못했습니다: $path" }
             return LlamaModel(h)
         }
@@ -88,12 +89,22 @@ object LlamaNative {
     }
     val supportsAccelerated: Boolean get() = "asimddp" in cpuFeatures && "asimdhp" in cpuFeatures
 
-    /** 실제로 불러온 엔진 ("dp" | "base"), 아직 안 불렀으면 null */
+    /** 실제로 불러온 엔진 ("gpu" | "dp" | "base"), 아직 안 불렀으면 null */
     @Volatile var loaded: String? = null
         private set
 
+    /**
+     * 그래픽 칩 판(llama_jni_gpu)을 불러올지. 앱이 엔진을 처음 쓰기 전에 정한다 (한 프로세스에서 판을 바꿀 수 없음).
+     * llama.cpp가 공식 지원하는 Adreno 750/810/830/840에서만 켜야 한다 — 다른 Adreno는 OpenCL 초기화 중 드라이버가 앱을 죽인다.
+     */
+    @Volatile var useGpuEngine = false
+
     @Synchronized internal fun load() {
         if (loaded != null) return
+        if (useGpuEngine && supportsAccelerated) {
+            try { System.loadLibrary("llama_jni_gpu"); loaded = "gpu"; return }
+            catch (e: UnsatisfiedLinkError) { /* libOpenCL.so 없음 등: CPU 판으로 */ }
+        }
         val forced = System.getProperty("meetingnote.cpu")
         val want = when (forced) {
             "base" -> "base"
@@ -114,7 +125,8 @@ internal object LlamaLib {
         LlamaNative.load()
     }
 
-    external fun nativeLoad(path: String, nCtx: Int, threads: Int, draftPath: String?): Long
+    external fun nativeLoad(path: String, nCtx: Int, threads: Int, draftPath: String?, accel: Int): Long
+    external fun nativeGpuName(): String
     external fun nativeFree(handle: Long)
     external fun nativeCountTokens(handle: Long, text: String): Int
     external fun nativeFormatChat(handle: Long, system: String, user: String, assistantPrefix: String): ByteArray

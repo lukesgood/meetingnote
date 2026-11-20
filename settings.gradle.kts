@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "MeetingNote"
-include(":app", ":native-whisper", ":native-llama", ":native-whisper-base", ":native-llama-base")
+include(":app", ":native-whisper", ":native-llama", ":native-whisper-base", ":native-llama-base", ":native-llama-gpu")
