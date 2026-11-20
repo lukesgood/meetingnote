@@ -200,6 +200,19 @@ fun SettingsScreen(onBack: () -> Unit) {
             SectionCard(Icons.Default.Summarize, "회의록 요약", "녹취록으로 회의록과 제목을 만드는 모델입니다.") {
                 ModelOption(ModelCatalog.LLM, selected = null, tick = tick, busy = engine.busy,
                     onSelect = {}, onDelete = { confirmDelete = ModelCatalog.LLM })
+                HorizontalDivider()
+                ModelOption(ModelCatalog.GEMMA4_MTP, selected = null, tick = tick, busy = engine.busy,
+                    onSelect = {}, onDelete = { confirmDelete = ModelCatalog.GEMMA4_MTP })
+                var spec by remember { mutableStateOf(settings.speculative) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("보조 모델로 빠르게 생성", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text("보조 모델이 다음 단어를 미리 짐작하고 Gemma 4가 한꺼번에 확인합니다. 내용 품질은 같고 글을 쓰는 속도가 빨라집니다 " +
+                            "(문장 표현은 조금 달라질 수 있음).",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(spec, { spec = it; settings.speculative = it }, enabled = !engine.busy)
+                }
                 Hint("Gemma 4 하나로 회의록과 실시간 통역을 모두 합니다.")
                 // 이전 버전에서 받은 모델 파일이 남아 있으면 삭제할 수 있게 표시
                 ModelCatalog.retired.filter { remember(tick) { MeetingEngine.models.file(it).exists() } }.forEach { spec ->

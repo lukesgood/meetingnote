@@ -9,6 +9,9 @@
 
 #include "llama.h"
 #include "ggml-cpu.h"
+#include "common.h"
+#include "sampling.h"
+#include "speculative.h"
 #include "../../../../native-common/cpu_affinity.h"
 
 #define TAG "LlamaJNI"
@@ -26,6 +29,11 @@ struct Session {
     // KV 캐시에 현재 들어 있는 토큰 열 (다음 프롬프트와 겹치는 앞부분은 다시 계산하지 않음)
     std::vector<llama_token> cached;
     bool                reuse = true;
+    // 추측 생성 (Gemma 4 MTP 보조 모델): 보조 모델이 다음 토큰 몇 개를 미리 짐작하고 본 모델이 한 번에 확인.
+    // 폰(SD 7s Gen 2)에서 번역 생성 약 2배, 회의록 구간 메모 약 1.4배 (2026-11-20)
+    common_params                      spec_params;
+    common_speculative_init_result_ptr spec_init;
+    common_speculative *               spec = nullptr;
 };
 
 void log_cb(ggml_log_level level, const char * text, void *) {
@@ -78,12 +86,115 @@ std::vector<llama_token> tokenize(const llama_vocab * vocab, const std::string &
     return toks;
 }
 
+
+// 추측 생성 (llama.cpp examples/speculative-simple와 같은 흐름). KV 앞부분 재사용·진행률·중단은 일반 생성과 동일.
+// 마지막 프롬프트 토큰은 디코드하지 않고 남겨 두었다가 [마지막 토큰, 추측 토큰들]을 한 번에 확인한다.
+jstring generate_spec(JNIEnv * env, Session * s, const std::vector<llama_token> & toks, size_t common,
+        int maxTokens, float temperature, float topP, float repeatPenalty,
+        jobject callback, jmethodID onToken, jobject progress, jmethodID onPrompt) {
+    llama_context * ctx = s->ctx;
+    llama_context * ctx_dft = s->spec_params.speculative.draft.ctx_dft;
+    llama_memory_t mem = llama_get_memory(ctx);
+    const llama_seq_id seq = 0;
+    // 보조 모델이 직전 위치의 상태를 받을 수 있도록 마지막 토큰 앞의 한 토큰 이상은 이번에 다시 계산
+    if (common + 2 > toks.size()) common = toks.size() >= 2 ? toks.size() - 2 : 0;
+    llama_memory_seq_rm(mem, seq, (llama_pos) common, -1);
+    if (ctx_dft) llama_memory_seq_rm(llama_get_memory(ctx_dft), seq, (llama_pos) common, -1);
+    s->cached.assign(toks.begin(), toks.begin() + common);
+    auto fail = [&](const char * msg) {
+        llama_memory_clear(mem, true);
+        if (ctx_dft) llama_memory_clear(llama_get_memory(ctx_dft), true);
+        s->cached.clear();
+        return env->NewStringUTF(msg);
+    };
+
+    const int64_t t0 = ggml_time_us();
+    const int n_batch = onPrompt ? std::min<int>(256, (int) llama_n_batch(ctx)) : (int) llama_n_batch(ctx);
+    const size_t n_prompt = toks.size() - 1;              // 마지막 토큰 제외
+    const int to_eval = (int) (toks.size() - common);
+    for (size_t i = common; i < n_prompt; i += n_batch) {
+        const size_t n = std::min<size_t>(n_batch, n_prompt - i);
+        common_batch b(ctx);
+        for (size_t k = 0; k < n; ++k) b.add(toks[i + k], (llama_pos) (i + k), seq, false);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, b.get()) != 0) return fail("error:decode_failed");
+        if (!common_speculative_process(s->spec, b)) return fail("error:decode_failed");
+        s->cached.insert(s->cached.end(), toks.begin() + i, toks.begin() + i + n);
+        if (onPrompt) env->CallVoidMethod(progress, onPrompt, (jint) (i + n - common), (jint) to_eval);
+        if (s->cancel) return fail("error:cancelled");
+    }
+    const int64_t t1 = ggml_time_us();
+
+    common_params_sampling sp;
+    sp.temp = temperature; sp.top_p = topP; sp.top_k = 0; sp.min_p = 0.0f;
+    sp.penalty_repeat = repeatPenalty; sp.penalty_last_n = 256;
+    common_sampler_ptr smpl(common_sampler_init(s->model, sp));
+
+    llama_tokens prompt_tgt(toks.begin(), toks.end() - 1);
+    llama_token id_last = toks.back();
+    int n_past = (int) prompt_tgt.size();
+    common_speculative_begin(s->spec, seq, prompt_tgt);
+
+    std::string pending;
+    int n_gen = 0;
+    bool stop = false;
+    llama_tokens draft;
+    common_batch bt(ctx);
+    while (!stop && !s->cancel && n_gen < maxTokens) {
+        int n_draft_max = std::min((int) llama_n_ctx(ctx) - n_past - 2, maxTokens - n_gen - 1);
+        n_draft_max = std::max(n_draft_max, 0);
+        draft.clear();
+        common_speculative_get_draft_params(s->spec, seq) = { true, n_draft_max, n_past, id_last, &prompt_tgt, &draft };
+        common_speculative_draft(s->spec);
+        if (ctx_dft) llama_memory_seq_rm(llama_get_memory(ctx_dft), seq, n_past, -1);
+
+        bt.clear();
+        bt.add(id_last, n_past, seq, true);
+        for (size_t i = 0; i < draft.size(); ++i) bt.add(draft[i], n_past + 1 + (llama_pos) i, seq, true);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, bt.get()) != 0) return fail("error:decode_failed");
+        if (!common_speculative_process(s->spec, bt)) return fail("error:decode_failed");
+
+        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx, draft);
+        common_speculative_accept(s->spec, seq, ids.size() - 1);
+        n_past += 1;                                       // id_last
+        for (size_t i = 0; i < ids.size(); ++i) {
+            prompt_tgt.push_back(id_last);
+            id_last = ids[i];
+            if (i > 0) n_past += 1;                        // 받아들인 추측 토큰
+            if (llama_vocab_is_eog(s->vocab, id_last)) { stop = true; break; }
+            char piece[256];
+            int len = llama_token_to_piece(s->vocab, id_last, piece, sizeof(piece), 0, false);
+            if (len > 0) pending.append(piece, len);
+            ++n_gen;
+            size_t ok = utf8_complete_prefix(pending);
+            if (ok > 0) {
+                jbyteArray arr = to_bytes(env, pending.substr(0, ok));
+                jboolean cont = env->CallBooleanMethod(callback, onToken, arr);
+                env->DeleteLocalRef(arr);
+                pending.erase(0, ok);
+                if (!cont) { stop = true; break; }
+            }
+            if (n_gen >= maxTokens) { stop = true; break; }
+        }
+        // KV에는 prompt_tgt까지만 남김 (확인에 쓰고 버린 추측 토큰 제거). id_last는 다음 반복에서 계산
+        n_past = (int) prompt_tgt.size();
+        llama_memory_seq_rm(mem, seq, n_past, -1);
+        if (ctx_dft) llama_memory_seq_rm(llama_get_memory(ctx_dft), seq, n_past, -1);
+    }
+    const int64_t t2 = ggml_time_us();
+    s->cached = prompt_tgt;
+
+    std::string perf = std::to_string(toks.size() - common) + "," + std::to_string((t1 - t0) / 1000) + "," +
+                       std::to_string(n_gen) + "," + std::to_string((t2 - t1) / 1000) + "," + std::to_string(common);
+    LOGI("perf(spec) %s", perf.c_str());
+    return env->NewStringUTF(perf.c_str());
+}
+
 } // namespace
 
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring modelPath, jint nCtx, jint threads) {
+Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring modelPath, jint nCtx, jint threads, jstring draftPath) {
     llama_log_set(log_cb, nullptr);
     llama_backend_init();
 
@@ -118,6 +229,35 @@ Java_com_meetingnote_llama_LlamaLib_nativeLoad(JNIEnv * env, jobject, jstring mo
     s->pool  = pool;
     s->vocab = llama_model_get_vocab(model);
     LOGI("n_swa=%d", llama_model_n_swa(model));
+
+    // 보조 모델(MTP)이 있으면 추측 생성 준비. 실패하면 일반 생성으로 동작
+    const std::string dpath = jstr(env, draftPath);
+    if (!dpath.empty() && common_context_can_seq_rm(ctx) == COMMON_CONTEXT_SEQ_RM_TYPE_PART) {   // 추측 토큰을 지울 수 있어야 함
+        try {
+            common_params & p = s->spec_params;
+            p.model.path = path;
+            p.n_ctx = nCtx; p.n_batch = 512; p.n_ubatch = 512;
+            p.cpuparams.n_threads = threads; p.cpuparams_batch.n_threads = threads;
+            p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+            p.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+            p.speculative.draft.mparams.path = dpath;
+            p.speculative.draft.cpuparams.n_threads = threads;
+            p.speculative.draft.cpuparams_batch.n_threads = threads;
+            common_params pd = common_base_params_to_speculative(p);
+            s->spec_init = common_speculative_init_from_params(pd, model, ctx);
+            llama_context * ctx_dft = s->spec_init ? s->spec_init->context() : nullptr;
+            if (ctx_dft) {
+                if (pool) llama_attach_threadpool(ctx_dft, pool, pool);
+                p.speculative.draft.ctx_tgt = ctx;
+                p.speculative.draft.ctx_dft = ctx_dft;
+                s->spec = common_speculative_init(p.speculative, 1);
+            }
+        } catch (const std::exception & e) {
+            LOGE("speculative init failed: %s", e.what());
+            s->spec = nullptr;
+        }
+        LOGI("speculative (MTP): %s", s->spec ? "on" : "off");
+    }
     return reinterpret_cast<jlong>(s);
 }
 
@@ -125,6 +265,8 @@ JNIEXPORT void JNICALL
 Java_com_meetingnote_llama_LlamaLib_nativeFree(JNIEnv *, jobject, jlong h) {
     auto * s = reinterpret_cast<Session *>(h);
     if (!s) return;
+    if (s->spec) common_speculative_free(s->spec);
+    s->spec_init.reset();          // 보조 컨텍스트는 본 컨텍스트보다 먼저 해제 (KV를 공유)
     llama_free(s->ctx);
     if (s->pool) ggml_threadpool_free(s->pool);
     llama_model_free(s->model);
@@ -274,6 +416,10 @@ Java_com_meetingnote_llama_LlamaLib_nativeGenerate(JNIEnv * env, jobject, jlong 
         s->cached.clear();
         return env->NewStringUTF(msg);
     };
+
+    if (s->spec) {
+        return generate_spec(env, s, toks, common, maxTokens, temperature, topP, repeatPenalty, callback, onToken, progress, onPrompt);
+    }
 
     const int64_t t0 = ggml_time_us();
     // 진행률을 받는 경우 더 잘게 나눠 처리 (긴 프롬프트도 화면 진척이 자주 갱신되도록)

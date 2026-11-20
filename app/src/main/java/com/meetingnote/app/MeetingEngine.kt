@@ -91,8 +91,12 @@ object MeetingEngine {
     private var whisper: WhisperContext? = null
     private var whisperSpec: ModelSpec? = null
 
-    private fun loadLlm(spec: ModelSpec, nCtx: Int = 4096): LlamaModel =
-        LlamaModel.load(models.file(spec).path, nCtx = nCtx, threads = settings.threads)
+    /** Gemma 4는 보조 모델(MTP)이 있으면 추측 생성으로 불러옴 (같은 품질, 생성 약 1.4~2배) */
+    private fun loadLlm(spec: ModelSpec, nCtx: Int = 4096): LlamaModel {
+        val draft = ModelCatalog.GEMMA4_MTP.takeIf { spec == ModelCatalog.GEMMA4_E2B && settings.speculative && models.isReady(it) }
+        return LlamaModel.load(models.file(spec).path, nCtx = nCtx, threads = settings.threads,
+            draftPath = draft?.let { models.file(it).path })
+    }
 
     /** 요청한 음성인식 모델을 불러옴. 다른 모델이 올라가 있으면 해제 후 교체 */
     private fun loadWhisper(spec: ModelSpec): WhisperContext {
@@ -115,6 +119,11 @@ object MeetingEngine {
         if (!_state.value.busy) repo.recoverUnfinished()
         // 삭제된 기능의 모델 파일 정리 (예: 고정밀 turbo 874MB)
         ModelCatalog.removedFiles.forEach { java.io.File(models.dir, it).delete() }
+        // 이전 버전에서 Gemma 4만 받은 경우: 속도 향상용 보조 모델(59MB)을 이어서 받음
+        runCatching {
+            val mtp = ModelCatalog.GEMMA4_MTP
+            if (models.isReady(ModelCatalog.GEMMA4_E2B) && !models.isReady(mtp) && models.progress(mtp) == null) models.download(mtp)
+        }
         // 오류 보고용 동작 기록 (단계 변화만, 내용은 남기지 않음)
         scope.launch {
             state.map { it.phase }.distinctUntilChanged().collect { ErrorReporter.trail("단계: $it") }
@@ -765,6 +774,11 @@ object MeetingEngine {
 
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    /** 추측 생성 사용 (보조 모델이 있을 때). 문제가 생기면 끌 수 있도록 설정으로 둠 */
+    var speculative: Boolean
+        get() = prefs.getBoolean("speculative", true)
+        set(v) = prefs.edit().putBoolean("speculative", v).apply()
 
     /** 회의록 모델 (Gemma 4 하나) */
     val llm: ModelSpec get() = ModelCatalog.LLM

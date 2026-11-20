@@ -93,13 +93,27 @@ object ModelCatalog {
         note = "회의록과 실시간 통역 · 약 2.8GB · Apache-2.0",
     )
 
+    /**
+     * Gemma 4 추측 생성용 보조 모델 (MTP). 다음 토큰 몇 개를 미리 짐작해 본 모델이 한 번에 확인 → 같은 품질로 생성이 빨라짐.
+     * Redmi Note 13 Pro: 번역 생성 약 2배, 회의록 구간 메모 약 1.4배 (2026-11-20). Gemma 4를 받을 때 함께 받는다.
+     */
+    val GEMMA4_MTP = ModelSpec(
+        id = "gemma4-e2b-mtp",
+        title = "Gemma 4 E2B 보조 모델 (MTP)",
+        fileName = "mtp-gemma-4-E2B-it-Q4_0.gguf",
+        url = "$HF/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/mtp-gemma-4-E2B-it-Q4_0.gguf",
+        sizeBytes = 59_235_872,
+        kind = ModelSpec.Kind.LLM,
+        note = "회의록·통역 속도 향상 (생성 약 1.4~2배) · 59MB · Gemma 4를 받을 때 함께 받음",
+    )
+
     /** 회의록·통역 모델은 Gemma 4 하나 (2026-11-20: Qwen3·EXAONE 제거 — 품질 비슷하거나 낮고 느리며, EXAONE은 비상업 라이선스) */
     val LLM = GEMMA4_E2B
     val llms = listOf(GEMMA4_E2B)
     val INTERPRETER = GEMMA4_E2B
     /** 더 이상 쓰지 않는 모델: 파일이 남아 있으면 설정에서 삭제할 수 있게 보여 줌 */
     val retired = listOf(QWEN3_4B, EXAONE_1B)
-    val all = listOf(WHISPER, WHISPER_TURBO, VAD, GEMMA4_E2B)
+    val all = listOf(WHISPER, WHISPER_TURBO, VAD, GEMMA4_E2B, GEMMA4_MTP)
     /** 회의 후 정밀 인식 모델 */
     val REFINER = WHISPER_TURBO
 
@@ -119,6 +133,9 @@ class ModelStore(private val context: Context) {
 
     /** 시스템 DownloadManager로 내려받음 (백그라운드·재시도 지원). */
     fun download(spec: ModelSpec): Long {
+        // Gemma 4를 받을 때 속도 향상용 보조 모델도 함께
+        if (spec == ModelCatalog.GEMMA4_E2B && !isReady(ModelCatalog.GEMMA4_MTP) && progress(ModelCatalog.GEMMA4_MTP) == null)
+            download(ModelCatalog.GEMMA4_MTP)
         val dm = context.getSystemService(DownloadManager::class.java)
         file(spec).delete()
         val req = DownloadManager.Request(Uri.parse(spec.url))

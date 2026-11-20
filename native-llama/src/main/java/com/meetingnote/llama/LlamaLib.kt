@@ -63,8 +63,9 @@ class LlamaModel private constructor(private var handle: Long) : AutoCloseable {
     }
 
     companion object {
-        fun load(path: String, nCtx: Int = 4096, threads: Int = 4): LlamaModel {
-            val h = LlamaLib.nativeLoad(path, nCtx, threads)
+        /** @param draftPath 추측 생성용 보조 모델(Gemma 4 MTP) 경로. 없으면 일반 생성 */
+        fun load(path: String, nCtx: Int = 4096, threads: Int = 4, draftPath: String? = null): LlamaModel {
+            val h = LlamaLib.nativeLoad(path, nCtx, threads, draftPath)
             require(h != 0L) { "LLM 모델을 불러오지 못했습니다: $path" }
             return LlamaModel(h)
         }
@@ -113,7 +114,7 @@ internal object LlamaLib {
         LlamaNative.load()
     }
 
-    external fun nativeLoad(path: String, nCtx: Int, threads: Int): Long
+    external fun nativeLoad(path: String, nCtx: Int, threads: Int, draftPath: String?): Long
     external fun nativeFree(handle: Long)
     external fun nativeCountTokens(handle: Long, text: String): Int
     external fun nativeFormatChat(handle: Long, system: String, user: String, assistantPrefix: String): ByteArray
