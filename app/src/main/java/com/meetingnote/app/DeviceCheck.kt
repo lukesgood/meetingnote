@@ -28,6 +28,12 @@ object DeviceCheck {
         ModelCatalog.QWEN3_4B.id to LlmBench(promptTps = 38.7, genTps = 7.3),
         ModelCatalog.EXAONE_1B.id to LlmBench(promptTps = 99.0, genTps = 20.0),
     )
+    /**
+     * 회의 10분당 회의록 작업량(토큰) — 기준 기기 Qwen3 실측(10분당 258초, 프롬프트 70%)을 기준 속도로 나눈 값.
+     * 기준값이 없는 모델(Gemma 4)은 이 작업량과 실측 속도로 시간을 추정한다.
+     */
+    private const val MINUTES_PROMPT_TOK_PER_10MIN = 6990.0
+    private const val MINUTES_GEN_TOK_PER_10MIN = 565.0
     /** 기준 기기에서 회의 10분당 회의록 작성 시간(초) — 7.6분 회의 실측 (Qwen3 196초, EXAONE 39초) */
     private val REF_MINUTES_SEC_PER_10MIN = mapOf(ModelCatalog.QWEN3_4B.id to 258.0, ModelCatalog.EXAONE_1B.id to 51.0)
     /**
@@ -212,10 +218,11 @@ object DeviceCheck {
             val name = "회의록 · ${spec.title.substringBefore(" (").substringBefore(" Instruct")}"
             val lb = b?.llm?.get(spec.id)
             items += when {
-                !ramOkFor(spec) -> Item(name, Level.NO, "메모리가 부족합니다 (RAM ${if (spec == ModelCatalog.QWEN3_4B) "6" else "4"}GB 이상 필요).")
+                !ramOkFor(spec) -> Item(name, Level.NO, "메모리가 부족합니다 (RAM ${if (spec == ModelCatalog.EXAONE_1B) "4" else "6"}GB 이상 필요).")
                 lb == null -> Item(name, Level.UNKNOWN, if (b == null) notRun else "모델을 받은 뒤 다시 점검해 주세요.")
                 else -> {
-                    val perHour = REF_MINUTES_SEC_PER_10MIN.getValue(spec.id) * 6 * llmFactor(spec.id, lb, 0.7)
+                    val perHour = REF_MINUTES_SEC_PER_10MIN[spec.id]?.let { it * 6 * llmFactor(spec.id, lb, 0.7) }
+                        ?: (MINUTES_PROMPT_TOK_PER_10MIN / lb.promptTps + MINUTES_GEN_TOK_PER_10MIN / lb.genTps) * 6
                     Item(name, if (perHour <= 40 * 60) Level.OK else Level.SLOW,
                         "1시간 회의 기준 ${minutesText(perHour)} (말이 많을수록 길어짐)")
                 }

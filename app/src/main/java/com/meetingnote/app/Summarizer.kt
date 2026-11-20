@@ -81,6 +81,11 @@ class Summarizer(
             append("Ignore sentences unrelated to the meeting flow (broadcast phrases, out-of-context lines) as recognition errors.\n")
             append("Do not turn simple questions, confirmations or remarks into decisions or action items.\n")
             append("If there is almost no meeting content (mic test, brief chat), say so in one sentence in the Summary and write 'None' for the other sections.\n")
+            if (isNotes) {
+                // 긴 회의: 메모를 그대로 옮기면 길이 한도에 걸려 뒤 항목(결정·할 일·다음 회의)이 잘림 (2026-11-20, 31분 회의)
+                append("Do not copy the notes; merge similar points and rewrite them. Write at most 8 Key Discussion Points, one sentence each.\n")
+                append("Write all five sections (Summary, Key Discussion Points, Decisions, Action Items, Next Meeting) with the exact headings (## …) below.\n")
+            }
             append(termsNote)
             append("\n").append(minutesFormatEn).append("\n\n")
             append("Here is the $what.\n")
@@ -95,6 +100,11 @@ class Summarizer(
             append("회의 흐름과 무관한 문장(방송 멘트, 앞뒤 맥락 없이 튀는 문장)은 음성인식 오류로 보고 무시하세요.\n")
             append("단순한 질문·확인·혼잣말을 결정 사항이나 할 일로 바꾸지 마세요.\n")
             append("회의다운 내용이 거의 없으면(마이크 테스트, 짧은 잡담 등) 회의 요약에 그 사실을 한 문장으로 쓰고 나머지 항목은 '없음'으로 쓰세요.\n")
+            if (isNotes) {
+                // 긴 회의: 메모를 그대로 옮기면 길이 한도에 걸려 뒤 항목(결정·할 일·다음 회의)이 잘림 (2026-11-20, 31분 회의)
+                append("구간 메모를 그대로 옮기지 말고, 비슷한 내용은 하나로 묶어 다시 쓰세요. 주요 논의 사항은 최대 8개, 각 항목은 한 문장으로 쓰세요.\n")
+                append("회의 요약, 주요 논의 사항, 결정 사항, 할 일, 다음 회의 다섯 항목을 아래 형식의 제목(## …) 그대로 모두 빠짐없이 쓰세요.\n")
+            }
             append(termsNote)
             append("\n").append(minutesFormat).append("\n\n")
             append("다음은 $what 입니다.\n")
@@ -104,13 +114,13 @@ class Summarizer(
 
     private fun mapPrompt(part: String, idx: Int, total: Int) = if (en) buildString {
         append("Below is part ($idx/$total) of a meeting transcript (may mix Korean and English). In English, list only the key discussion points, ")
-        append("decisions, action items (owner/due) and schedule from this part as bullets (-), at most 10 lines. Mention each item once. ")
+        append("decisions, action items (owner/due) and schedule from this part as bullets (-), at most 10 lines, each a short single sentence. Mention each item once. ")
         append("Do not invent anything; keep numbers and dates as stated. Ignore out-of-context lines (broadcast phrases) as recognition errors.\n")
         append(termsNote)
         append("\n").append(part)
     } else buildString {
         append("다음은 회의 녹취록의 일부($idx/$total)입니다. 이 부분에서 나온 핵심 논의, 결정 사항, 할 일(담당자/기한), 일정만 ")
-        append("글머리표(-)로 최대 10줄 이내로 간결하게 정리하세요. 같은 내용은 한 번만 쓰세요. ")
+        append("글머리표(-)로 최대 10줄 이내로 간결하게 정리하세요. 각 줄은 짧은 한 문장으로 쓰세요. 같은 내용은 한 번만 쓰세요. ")
         append("녹취록에 없는 내용은 만들지 마세요. 숫자와 날짜는 원문 그대로 쓰세요. ")
         append("맥락과 무관한 문장(방송 멘트 등)은 음성인식 오류이므로 무시하세요.\n")
         append(termsNote)

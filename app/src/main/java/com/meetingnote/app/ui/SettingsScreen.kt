@@ -203,12 +203,12 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onSelect = { llm = spec; settings.llm = spec },
                         onDelete = { confirmDelete = spec })
                 }
-                Hint("EXAONE은 비상업적 용도로만 사용할 수 있습니다. 업무·상업적 용도에는 Qwen3(Apache-2.0)를 쓰세요.\n" +
-                    "Gemma 4는 통역 전용입니다(위 '통역' 항목에서 받기). 긴 회의의 회의록 형식이 무너지는 문제가 있어 회의록에는 쓰지 않습니다.")
+                Hint("Gemma 4는 실시간 통역에도 쓰여서, 하나만 받으면 회의록과 통역을 모두 쓸 수 있습니다. " +
+                    "EXAONE은 비상업적 용도로만 사용할 수 있습니다.")
             }
         }
         val vocabCard: @Composable () -> Unit = { VocabularyCard() }
-        val langCard: @Composable () -> Unit = { LanguageCard(tick, busy = engine.busy, onDelete = { confirmDelete = it }) }
+        val langCard: @Composable () -> Unit = { LanguageCard(tick) }
         val perfCard: @Composable () -> Unit = { DeviceCheckCard(tick, busy = engine.busy); PerformanceCard() }
         val storageCard: @Composable () -> Unit = { StorageCard(tick) }
         val aboutCard: @Composable () -> Unit = { AboutCard(onReport = { reporting = true }) }
@@ -344,7 +344,7 @@ private fun ModelOption(
 
 /** 통역(한국어 ↔ 영어)과 회의록 언어 */
 @Composable
-private fun LanguageCard(tick: Int, busy: Boolean, onDelete: (ModelSpec) -> Unit) {
+private fun LanguageCard(tick: Int) {
     val settings = MeetingEngine.settings
     var interpret by remember { mutableStateOf(settings.interpret) }
     var lang by remember { mutableStateOf(settings.minutesLang) }
@@ -357,15 +357,13 @@ private fun LanguageCard(tick: Int, busy: Boolean, onDelete: (ModelSpec) -> Unit
             }
             Switch(interpret, { interpret = it; settings.interpret = it })
         }
-        // 통역 전용 모델은 통역을 끈 상태에서도 보이게 (미리 받아 둘 수 있도록)
         val gemma = ModelCatalog.INTERPRETER
-        ModelOption(gemma, selected = null, tick = tick, busy = busy, onSelect = {}, onDelete = { onDelete(gemma) })
         if (interpret) {
             val spec = remember(tick) { MeetingEngine.interpreterSpec() }
             val ready = remember(tick) { MeetingEngine.models.isReady(spec) }
             val turbo = remember(tick) { MeetingEngine.liveSttSpec() == ModelCatalog.REFINER }
             Hint(
-                "번역은 회의록 요약 모델 설정과 상관없이 통역 전용 모델로 기기 안에서 합니다. " +
+                "번역은 회의록 모델 설정과 상관없이 ${gemma.title.substringBefore(" (")}(없으면 Qwen3)로 기기 안에서 합니다. " +
                     when {
                         spec == gemma && ready -> "지금은 ${gemma.title.substringBefore(" (")}로 통역합니다."
                         ready -> "${gemma.title.substringBefore(" (")}가 없어 ${spec.title.substringBefore(" (")}로 통역합니다. " +
@@ -378,7 +376,7 @@ private fun LanguageCard(tick: Int, busy: Boolean, onDelete: (ModelSpec) -> Unit
                     " 녹음 중에도 모델이 메모리에 올라가 배터리 사용이 늘어납니다."
             )
             if (!ready) Text(
-                "⚠ 통역 모델이 없습니다. 위에서 ${gemma.title.substringBefore(" (")}를 내려받아야 통역을 쓸 수 있습니다.",
+                "⚠ 통역 모델이 없습니다. 아래 '회의록 요약'에서 ${gemma.title.substringBefore(" (")}를 내려받아야 통역을 쓸 수 있습니다.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
             )
         }
@@ -493,6 +491,7 @@ private fun AboutCard(onReport: () -> Unit) {
                 "whisper.cpp · llama.cpp (ggml)" to "MIT",
                 "Whisper small (OpenAI)" to "MIT",
                 "Silero VAD" to "MIT",
+                "Gemma 4 E2B (Google)" to "Apache-2.0",
                 "Qwen3 4B Instruct (Alibaba)" to "Apache-2.0",
                 "EXAONE 4.0 1.2B (LG AI Research)" to "EXAONE AI Model License (비상업)",
             ).forEach { (name, lic) ->

@@ -61,7 +61,7 @@ object ModelCatalog {
         url = "$HF/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_0.gguf",
         sizeBytes = 2_375_773_280,
         kind = ModelSpec.Kind.LLM,
-        note = "고품질 · 약 7.5 토큰/초 · Apache-2.0",
+        note = "세부 숫자를 더 많이 남김 · Gemma 4보다 느림 · Apache-2.0",
     )
 
     val EXAONE_1B = ModelSpec(
@@ -76,9 +76,11 @@ object ModelCatalog {
     )
 
     /**
-     * 실시간 통역 전용 (2026-11-19 PC 비교, 17문장): Qwen3 4B보다 입력 처리 약 5배·생성 약 2배 빠르고
-     * 숫자(71억)·고유명사(두산)·'Pacific time'이 더 정확. 오인식으로 뜻이 불분명한 문장을 지어낸 경우가 1번 있음.
-     * 31분 회의록은 구간 메모를 그대로 옮기다 길이 한도에 걸려 형식이 무너져 회의록 모델로는 쓰지 않는다.
+     * 기본 회의록·통역 모델.
+     *  - 통역 (2026-11-19 PC 비교, 17문장): Qwen3 4B보다 입력 처리 약 5배·생성 약 2배 빠르고 숫자·고유명사가 더 정확.
+     *    오인식으로 뜻이 불분명한 문장을 지어낸 경우가 1번 있음.
+     *  - 회의록 (2026-11-20, 31분 회의): 구간 메모를 짧게·종합 시 다시 묶어 쓰게 한 프롬프트로 Qwen3와 비슷한 품질,
+     *    PC 기준 약 3.9배 빠름 (229초 vs 884초). Qwen3는 세부 숫자를 더 많이 남기고, Gemma는 회의 전체를 고르게 다룸.
      */
     val GEMMA4_E2B = ModelSpec(
         id = "gemma4-e2b",
@@ -87,10 +89,10 @@ object ModelCatalog {
         url = "$HF/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf",
         sizeBytes = 2_841_481_184,
         kind = ModelSpec.Kind.LLM,
-        note = "실시간 통역용 · Qwen3보다 번역이 약 2배 빠르고 숫자·고유명사가 정확 · Apache-2.0",
+        note = "기본 · 빠름 · Qwen3보다 회의록 약 4배, 번역 약 2배 빠름 · 통역에도 사용 · Apache-2.0",
     )
 
-    val llms = listOf(QWEN3_4B, EXAONE_1B)
+    val llms = listOf(GEMMA4_E2B, QWEN3_4B, EXAONE_1B)
     /** 실시간 통역 모델 (권장). 없고 Qwen3만 있으면 Qwen3로 통역 (EXAONE은 영→한 번역이 되지 않음, 2026-11-17 비교) */
     val INTERPRETER = GEMMA4_E2B
     val INTERPRETER_FALLBACK = QWEN3_4B
