@@ -1,5 +1,6 @@
 package com.meetingnote.app.ui
 
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.ColumnScope
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -203,27 +205,16 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                     }
                 } else if (s.interpreting) {
                     InterpretPane(s.lines, s.translatePending, compact = compact)
-                } else if ((s.phase == Phase.RECORDING || s.phase == Phase.LOADING) && !s.liveText) {
-                    // 실시간 녹취록 없음 (설정에서 끔, 또는 인식이 밀려 멈춤): 녹음만 하고 회의 후 녹음 전체를 인식
-                    Card(Modifier.fillMaxWidth().weight(1f)) {
-                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("녹음 중입니다", style = MaterialTheme.typography.titleMedium)
-                            Spacer(Modifier.height(8.dp))
-                            Text("회의가 끝나면 녹음 전체로 정확한 녹취록과 회의록을 만듭니다." +
-                                (if (s.lines.isNotEmpty()) "\n(멈추기 전까지 ${s.lines.size}문장 인식)" else ""),
-                                style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
                 } else {
-                    Text("실시간 녹취록", style = MaterialTheme.typography.titleMedium)
+                    Text(if (s.phase == Phase.RECORDING) "실시간 녹취록" else "녹취록", style = MaterialTheme.typography.titleMedium)
                     val listState = rememberLazyListState()
                     LaunchedEffect(s.lines.size) { if (s.lines.isNotEmpty()) listState.animateScrollToItem(s.lines.size - 1) }
                     Card(Modifier.fillMaxWidth().weight(1f)) {
                         LazyColumn(state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(if (compact) 12.dp else 16.dp)) {
                             if (s.lines.isEmpty()) item {
-                                Text("말하기 시작하면 문장이 끝날 때마다(보통 5~15초) 텍스트가 나타납니다.", style = MaterialTheme.typography.bodyMedium)
+                                Text(if (s.phase == Phase.RECORDING) "말하기 시작하면 문장이 끝날 때마다(보통 5~15초) 텍스트가 나타납니다."
+                                    else "녹음 전체를 인식하고 있습니다. 끝나면 녹취록이 여기에 나타납니다.",
+                                    style = MaterialTheme.typography.bodyMedium)
                             }
                             items(s.lines) { l ->
                                 TranscriptRow(l, showTranslation = s.interpreting)
@@ -234,7 +225,41 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                 }
             }
 
-            if (wideLayout) {
+            // 실시간 녹취록 없이 녹음만 할 때: 녹취록 칸 없이 시간·파형·버튼만 크게 가운데에
+            val recordOnly = (s.phase == Phase.RECORDING || s.phase == Phase.LOADING) && !s.liveText && !s.interpreting
+            if (recordOnly) {
+                val crt = (maxHeight * (if (shortScreen) 0.3f else 0.4f)).coerceIn(90.dp, 420.dp)
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        Modifier.weight(1f).widthIn(max = 900.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 16.dp, Alignment.CenterVertically),
+                    ) {
+                        RecordingBadge(s.phase, paused)
+                        Text(formatTime(s.elapsedMs),
+                            style = if (compact) MaterialTheme.typography.displayMedium else MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold)
+                        if (s.phase == Phase.RECORDING) {
+                            val scope by MeetingEngine.scopeData.collectAsState()
+                            ScopeView(scope, paused, Modifier.fillMaxWidth(), crtHeight = crt, compact = compact)
+                        } else {
+                            CircularProgressIndicator(Modifier.size(36.dp))
+                        }
+                        s.liveNotice?.let {
+                            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+                                textAlign = TextAlign.Center)
+                        }
+                        Text(
+                            if (paused) "일시정지 중에는 녹음하지 않습니다."
+                            else "녹음만 하고 있습니다. 회의가 끝나면 녹음 전체로 녹취록과 회의록을 만듭니다.",
+                            style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (s.phase == Phase.ERROR) Text(s.message ?: "", color = MaterialTheme.colorScheme.error)
+                    }
+                    Column(Modifier.widthIn(max = 600.dp).fillMaxWidth().padding(top = 12.dp)) { controls() }
+                }
+            } else if (wideLayout) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     // 통역 중에는 자막 영역을 넓게 (상태 1 : 통역 1.8)
                     Column(Modifier.weight(if (s.interpreting) 1f else 1.3f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -252,5 +277,24 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** 녹음 중 표시: 깜박이는 빨간 점 + 상태 */
+@Composable
+private fun RecordingBadge(phase: Phase, paused: Boolean) {
+    val recording = phase == Phase.RECORDING && !paused
+    val t = androidx.compose.animation.core.rememberInfiniteTransition(label = "rec")
+    val alpha by t.animateFloat(1f, 0.25f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween<Float>(800),
+            androidx.compose.animation.core.RepeatMode.Reverse), label = "dot")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.foundation.Canvas(Modifier.size(14.dp)) {
+            drawCircle(if (recording) androidx.compose.ui.graphics.Color(0xFFE53935).copy(alpha = alpha)
+                else androidx.compose.ui.graphics.Color.Gray)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(when { phase == Phase.LOADING -> "녹음 준비 중"; paused -> "일시정지"; else -> "녹음 중" },
+            style = MaterialTheme.typography.titleMedium)
     }
 }
