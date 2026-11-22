@@ -42,15 +42,14 @@ class StreamingTranscriber(
     private val onChunkDone: (audioMs: Long, procMs: Long) -> Unit,
 ) {
     private val sr = AudioRecorder.SAMPLE_RATE
-    /** 지금 인식에 쓰는 모델. 녹음 중 바꿀 수 있음 (정밀 모델이 밀리면 기본 모델로) */
-    @Volatile private var whisper: WhisperContext = initialWhisper
-    @Volatile private var pendingSwap: Pair<WhisperContext, (WhisperContext) -> Unit>? = null
+    private val whisper: WhisperContext = initialWhisper
+    /** 실시간 인식 중단 (인식이 계속 밀릴 때). 이후 들어오는 음성과 대기 조각은 버린다 — 회의 후 녹음 전체를 다시 인식 */
+    @Volatile var stopped = false
+        private set
+    @Volatile private var onStopped: (() -> Unit)? = null
 
-    /**
-     * 다음 조각부터 다른 모델로 인식. 지금 처리 중인 조각이 끝난 뒤 바꾸고,
-     * 바뀐 뒤 이전 모델을 onReplaced로 돌려준다 (해제는 호출한 쪽에서).
-     */
-    fun switchModel(next: WhisperContext, onReplaced: (WhisperContext) -> Unit) { pendingSwap = next to onReplaced }
+    /** 지금 처리 중인 조각이 끝나면 멈추고 onIdle 호출 (추론 스레드에서. 모델 해제는 호출한 쪽에서) */
+    fun stop(onIdle: () -> Unit) { onStopped = onIdle; stopped = true }
 
     /**
      * 발화 단위 분할: 말소리가 나온 뒤 0.5초 이상 쉬면 그 쉼의 가운데에서 자른다.
@@ -87,17 +86,15 @@ class StreamingTranscriber(
     val pendingChunks get() = pending.get()
     private val worker: Job = scope.launch {
         for ((offset, pcm, floor) in queue) {
-            pendingSwap?.let { (next, onReplaced) ->
-                pendingSwap = null
-                val old = whisper; whisper = next; onReplaced(old)
-            }
-            try { process(offset, pcm, floor) } finally { pending.decrementAndGet() }
+            try { if (!stopped) process(offset, pcm, floor) } finally { pending.decrementAndGet() }
+            if (stopped) onStopped?.let { onStopped = null; it() }
             kotlinx.coroutines.yield()   // 같은 추론 스레드의 번역 작업이 끼어들 수 있게
         }
     }
 
     @Synchronized
     fun feed(samples: ShortArray) {
+        if (stopped) return
         System.arraycopy(samples, 0, buffer, len, samples.size)
         len += samples.size
         // 100ms 프레임 단위로 말소리/쉼 판단
@@ -127,11 +124,10 @@ class StreamingTranscriber(
 
     /** 녹음 종료: 남은 버퍼를 처리하고 모든 작업이 끝날 때까지 대기 */
     suspend fun finish() {
-        synchronized(this) { if (len > 0) emit(len) }
+        synchronized(this) { if (len > 0 && !stopped) emit(len) }
         queue.close()
         worker.join()
-        // 바꾸기로 했지만 남은 조각이 없어 적용되지 않은 경우: 이전 모델을 돌려줘 해제되게 함
-        pendingSwap?.let { (next, onReplaced) -> pendingSwap = null; val old = whisper; whisper = next; onReplaced(old) }
+        onStopped?.let { onStopped = null; it() }
     }
 
     private fun findCut(): Int {

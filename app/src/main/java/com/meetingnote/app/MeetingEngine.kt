@@ -31,8 +31,10 @@ data class EngineState(
     val lines: List<TranscriptLine> = emptyList(),
     /** 아직 인식되지 않은 녹음 길이 */
     val sttBacklogMs: Long = 0,
-    /** 녹음 중 알림 (예: 정밀 모델이 밀려 기본 모델로 바꿈) */
+    /** 녹음 중 알림 (예: 인식이 밀려 실시간 녹취록을 멈춤) */
     val liveNotice: String? = null,
+    /** 녹음 중 실시간 인식을 하고 있는지 (설정에서 꺼져 있거나 밀려서 멈추면 false) */
+    val liveText: Boolean = true,
     val lastRtf: Double? = null,
     val summaryText: String = "",
     val summaryStage: String = "",
@@ -285,34 +287,33 @@ object MeetingEngine {
     }
 
     private var slowChunks = 0
+    @Volatile private var liveStopped = false
 
     /**
-     * 정밀 모델(turbo)로 실시간 인식 중 처리가 계속 밀리면(인식 대기 40초 초과가 조각 2개 연속) 기본 모델로 바꾼다.
-     * 발열로 느려지는 긴 회의 대비. 녹음 중 화면만 덜 정확해지고, 회의 후 정밀 인식으로 최종 녹취록은 그대로 정확하다.
-     * 추론 스레드(조각 처리 콜백)에서 호출된다.
+     * 실시간 인식이 계속 밀리면(인식 대기 40초 초과가 조각 2개 연속) 실시간 인식을 멈춘다. 녹음은 계속.
+     * 발열로 느려지는 긴 회의 대비. 기본 모델로 바꾸는 방식은 한국어 오인식이 많아 화면 녹취록이 오히려 방해가 됐다
+     * (2026-11-23 태블릿 시험). 회의 후 녹음 전체를 정밀 모델로 인식해 녹취록을 만든다.
+     * 통역 중에는 멈추지 않는다 (번역에 필요). 추론 스레드(조각 처리 콜백)에서 호출된다.
      */
-    private fun fallbackIfBehind(meetingId: String, backlogMs: Long) {
+    private fun pauseLiveIfBehind(backlogMs: Long) {
         val t = transcriber ?: return
-        if (liveSpec != ModelCatalog.REFINER) return
+        if (settings.interpret || liveStopped) return
         slowChunks = if (backlogMs > liveFallbackBacklogMs) slowChunks + 1 else 0
         if (slowChunks < 2) return
-        slowChunks = 0
-        val small = settings.whisper
-        if (!models.isReady(small)) return
-        runCatching {
-            val ctx = WhisperContext.load(models.file(small).path)
-            t.switchModel(ctx) { old -> old.close() }
-            whisper = ctx; whisperSpec = small; liveSpec = small
-            repo.get(meetingId)?.let { repo.save(it.copy(sttModel = small.title)) }
-            _state.update { it.copy(liveNotice = "인식이 밀려 기본 모델로 바꿨습니다. 회의 후 정밀 인식으로 녹취록을 다시 만듭니다.") }
-            Log.i(TAG, "live STT fell behind (${backlogMs / 1000}s) -> ${small.id}")
-            ErrorReporter.trail("실시간 인식 기본 모델로 전환 (인식 대기 ${backlogMs / 1000}초)")
-        }.onFailure { Log.e(TAG, "live fallback failed", it) }
+        liveStopped = true
+        t.stop { runCatching { releaseWhisper() } }   // 메모리·발열 줄이기: 실시간 인식 모델 해제
+        _state.update { it.copy(liveText = false, sttBacklogMs = 0,
+            liveNotice = "인식이 밀려 실시간 녹취록을 멈췄습니다. 녹음은 계속되며, 회의가 끝나면 녹음 전체로 정확한 녹취록을 만듭니다.") }
+        Log.i(TAG, "live STT fell behind (${backlogMs / 1000}s) -> live transcript paused")
+        ErrorReporter.trail("실시간 인식 중단 (인식 대기 ${backlogMs / 1000}초)")
     }
     /** 전환 기준 (테스트: --el live_fallback_ms 0 으로 낮춰 바로 전환되게 할 수 있음, 저장하지 않음) */
     @Volatile var liveFallbackBacklogMs = 40_000L
 
-    /** 이번 녹음의 실시간 인식 모델 (정밀 인식 생략 판단용) */
+    /** 회의 후 녹음 전체 인식에 쓰는 모델: 정밀 모델이 있으면 정밀, 없으면 기본 */
+    fun postSttSpec(): ModelSpec = if (models.isReady(ModelCatalog.REFINER)) ModelCatalog.REFINER else settings.whisper
+
+    /** 이번 녹음의 실시간 인식 모델 (정밀 인식 생략 판단용). 실시간 인식을 안 하면 null */
     var liveSpec: ModelSpec? = null
         private set
 
@@ -340,22 +341,25 @@ object MeetingEngine {
 
     fun startRecording() {
         if (_state.value.busy || checkingBlocks()) return
-        val sttSpec = liveSttSpec()
+        // 실시간 녹취록: 통역 중이거나 설정에서 켰을 때만. 끄면 녹음만 하고 회의 후 녹음 전체를 인식
+        val live = settings.interpret || settings.liveTranscript
+        val sttSpec = if (live) liveSttSpec() else postSttSpec()
         if (!checkModels(sttSpec)) return
-        liveSpec = sttSpec
-        ErrorReporter.trail("실시간 인식 모델: ${sttSpec.id}")
+        liveSpec = if (live) sttSpec else null
+        liveStopped = false
+        ErrorReporter.trail(if (live) "실시간 인식 모델: ${sttSpec.id}" else "실시간 인식 끔 (회의 후 ${sttSpec.id})")
         val meeting = repo.create().copy(sttModel = sttSpec.title).also { repo.save(it) }
-        _state.value = EngineState(Phase.LOADING, meetingId = meeting.id, message = "음성인식 모델 불러오는 중…")
+        _state.value = EngineState(Phase.LOADING, meetingId = meeting.id, liveText = live,
+            message = if (live) "음성인식 모델 불러오는 중…" else "녹음 준비 중…")
         startService()
 
         scope.launch(inference) {
             try {
-                val w = loadWhisper(sttSpec)
                 if (settings.interpret) startInterpreter()
                 recordedSamples = 0; processedMs = 0
-                val t = StreamingTranscriber(
+                val t = if (!live) null else StreamingTranscriber(
                     scope = CoroutineScope(inference),
-                    initialWhisper = w,
+                    initialWhisper = loadWhisper(sttSpec),
                     vadPath = models.file(ModelCatalog.VAD).path,
                     threads = settings.threads,
                     vocabulary = settings.vocabulary,
@@ -371,7 +375,7 @@ object MeetingEngine {
                                 sttBacklogMs = backlog,
                             )
                         }
-                        fallbackIfBehind(meeting.id, backlog)
+                        pauseLiveIfBehind(backlog)
                     },
                 )
                 slowChunks = 0
@@ -381,14 +385,14 @@ object MeetingEngine {
                     repo.audioFile(meeting.id),
                     onFrames = { f ->
                         recordedSamples += f.size
-                        t.feed(f)
+                        t?.feed(f)
                         _scope.value = scopeAnalyzer.push(f)
                     },
                     onLevel = { lv ->
                         val elapsed = recordedSamples * 1000 / AudioRecorder.SAMPLE_RATE
                         _state.update {
                             it.copy(level = lv, elapsedMs = elapsed,
-                                sttBacklogMs = (elapsed - processedMs).coerceAtLeast(0))
+                                sttBacklogMs = if (t == null || liveStopped) 0 else (elapsed - processedMs).coerceAtLeast(0))
                         }
                     },
                 )
@@ -461,14 +465,17 @@ object MeetingEngine {
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
             applyTermFixes(id)
             releaseWhisper()
-            val refine = shouldRefine(lines, liveTurbo = liveSpec == ModelCatalog.REFINER)
+            // 실시간 인식을 안 했거나 도중에 멈췄으면 녹음 전체 인식은 필수 (정밀 모델 없으면 기본 모델)
+            val liveFull = liveSpec != null && !liveStopped
+            val refine = if (!liveFull && !settings.interpret) true
+                else shouldRefine(lines, liveTurbo = liveSpec == ModelCatalog.REFINER)
             // 회의록 먼저 보기: 정밀 인식을 기다리지 않고 실시간 녹취록으로 먼저 작성하고, 정밀 인식 뒤 다시 작성
-            val quick = refine && autoSummarize && settings.quickMinutes && lines.isNotEmpty() && models.isReady(settings.llm)
+            val quick = liveFull && refine && autoSummarize && settings.quickMinutes && lines.isNotEmpty() && models.isReady(settings.llm)
             // 먼저 만드는 회의록이 실패하거나 중단돼도 정밀 인식은 계속한다 (녹취록 정확도가 더 중요)
             val first = if (quick) summarizeInternal(id, finish = false) else SummaryResult.FAILED
             var refined = false
             try {
-                if (refine) refined = refineInternal(id)
+                if (refine) refined = refineInternal(id, if (liveFull) ModelCatalog.REFINER else postSttSpec())
             } catch (e: Throwable) {
                 // 정밀 인식이 실패해도 실시간 녹취록으로 회의록은 만든다
                 Log.e(TAG, "refine failed", e); ErrorReporter.recordError(e)
@@ -615,8 +622,7 @@ object MeetingEngine {
      * 원래 실시간 녹취록은 transcript_live.json으로 보관.
      */
     /** @return 녹취록을 정밀 인식 결과로 바꿨는지 */
-    private suspend fun refineInternal(id: String): Boolean = withContext(inference) {
-        val spec = ModelCatalog.REFINER
+    private suspend fun refineInternal(id: String, spec: ModelSpec = ModelCatalog.REFINER): Boolean = withContext(inference) {
         val audio = repo.audioFile(id)
         val total = wavSampleCount(audio)
         if (total < AudioRecorder.SAMPLE_RATE) return@withContext false
@@ -694,7 +700,8 @@ object MeetingEngine {
         if (out.isNotEmpty()) {
             repo.backupLiveTranscript(id)
             repo.saveTranscript(id, out)
-            repo.get(id)?.let { repo.save(it.copy(sttModel = "${spec.title.substringBefore(" (")} (정밀 인식)")) }
+            repo.get(id)?.let { repo.save(it.copy(sttModel =
+                if (spec == ModelCatalog.REFINER) "${spec.title.substringBefore(" (")} (정밀 인식)" else spec.title)) }
             _state.update { it.copy(lines = out) }
             applyTermFixes(id)
         }
@@ -874,10 +881,10 @@ class Settings(context: Context) {
     var liveModel: String
         get() = prefs.getString("live_model", "auto") ?: "auto"
         set(v) = prefs.edit().putString("live_model", v).apply()
-    /** 녹음 중 실시간 녹취록 표시 (끄면 파형만 보이고 인식은 계속함 — 회의 후 정밀 인식·복구용) */
-    var showLiveTranscript: Boolean
-        get() = prefs.getBoolean("show_live_transcript", true)
-        set(v) = prefs.edit().putBoolean("show_live_transcript", v).apply()
+    /** 녹음 중 실시간 녹취록 (기본 끔: 녹음만 하고 회의 후 녹음 전체를 정밀 인식. 통역 중에는 항상 켬) */
+    var liveTranscript: Boolean
+        get() = prefs.getBoolean("live_transcript", false)
+        set(v) = prefs.edit().putBoolean("live_transcript", v).apply()
     /** 실시간 인식을 정밀 모델(turbo)로 했으면 회의 후 정밀 인식 생략 (회의록이 빨리 나옴) */
     var skipRefineAfterTurbo: Boolean
         get() = prefs.getBoolean("skip_refine_after_turbo", false)

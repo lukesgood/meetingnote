@@ -59,7 +59,6 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
     val s by MeetingEngine.state.collectAsState()
     var paused by remember { mutableStateOf(MeetingEngine.isPaused) }
     var wasBusy by remember { mutableStateOf(false) }
-    var showLive by remember { mutableStateOf(MeetingEngine.settings.showLiveTranscript) }
 
     LaunchedEffect(s.phase) {
         if (s.busy) wasBusy = true
@@ -113,7 +112,7 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                             val anim by androidx.compose.animation.core.animateFloatAsState(f, label = "refine")
                             androidx.compose.material3.LinearProgressIndicator(progress = { anim }, modifier = Modifier.fillMaxWidth())
                             Text(
-                                "정밀 모델(large-v3-turbo)로 녹음 전체를 다시 인식해 녹취록 정확도를 높이는 중입니다." +
+                                "녹음 전체를 한 번에 인식해 정확한 녹취록을 만드는 중입니다." +
                                     (s.refineEtaSec?.let { e -> " 남은 시간 약 ${if (e < 60) "${e}초" else "${e / 60}분"}" } ?: ""),
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -133,7 +132,7 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                         val model = if (s.phase != Phase.RECORDING) ""
                             else if (MeetingEngine.liveSpec == com.meetingnote.app.ModelCatalog.REFINER) "정밀 모델 · " else "기본 모델 · "
                         val rtf = model + (s.lastRtf?.let { "인식 속도: 실제 시간의 %.2f배".format(it) } ?: "인식 속도 측정 중")
-                        if (s.phase != Phase.SUMMARIZING) Text(
+                        if (s.phase != Phase.SUMMARIZING && !(s.phase == Phase.RECORDING && !s.liveText)) Text(
                             "$rtf · 인식 대기 ${formatTime(s.sttBacklogMs)} · 문장 ${s.lines.size}개" +
                                 (if (s.interpreting) " · 번역 대기 ${s.translatePending}문장" else ""),
                             style = MaterialTheme.typography.bodySmall,
@@ -204,19 +203,17 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                     }
                 } else if (s.interpreting) {
                     InterpretPane(s.lines, s.translatePending, compact = compact)
-                } else if (s.phase == Phase.RECORDING && !showLive) {
-                    // 녹취록 숨김: 인식은 계속하고 문장 수만 알림
+                } else if ((s.phase == Phase.RECORDING || s.phase == Phase.LOADING) && !s.liveText) {
+                    // 실시간 녹취록 없음 (설정에서 끔, 또는 인식이 밀려 멈춤): 녹음만 하고 회의 후 녹음 전체를 인식
                     Card(Modifier.fillMaxWidth().weight(1f)) {
                         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("녹취록을 숨겼습니다", style = MaterialTheme.typography.titleMedium)
+                            Text("녹음 중입니다", style = MaterialTheme.typography.titleMedium)
                             Spacer(Modifier.height(8.dp))
-                            Text("녹음과 인식은 계속하고 있습니다 (지금까지 ${s.lines.size}문장).\n" +
-                                "회의가 끝나면 녹취록과 회의록을 만듭니다.",
+                            Text("회의가 끝나면 녹음 전체로 정확한 녹취록과 회의록을 만듭니다." +
+                                (if (s.lines.isNotEmpty()) "\n(멈추기 전까지 ${s.lines.size}문장 인식)" else ""),
                                 style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(12.dp))
-                            OutlinedButton(onClick = { showLive = true }) { Text("이번만 보기") }
                         }
                     }
                 } else {
