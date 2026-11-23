@@ -27,6 +27,7 @@ sealed interface Screen {
     data object Home : Screen
     data object Live : Screen
     data object Settings : Screen
+    data object ScopeDemo : Screen
     data class Detail(val id: String) : Screen
 }
 
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
                         onOpenSettings = { screen = Screen.Settings },
                     )
                     Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Home })
+                    Screen.ScopeDemo -> ScopeDemoScreen(onBack = { screen = Screen.Home })
                     Screen.Live -> LiveScreen(
                         onDone = { id -> screen = if (id != null) Screen.Detail(id) else Screen.Home },
                         onBack = { screen = Screen.Home },
@@ -106,6 +108,7 @@ class MainActivity : ComponentActivity() {
             com.meetingnote.app.DeviceCheck.bench = null
             getSharedPreferences("device_check", MODE_PRIVATE).edit().clear().apply()
         }
+        if (intent?.getBooleanExtra("scope_demo", false) == true) { intent.removeExtra("scope_demo"); screen = Screen.ScopeDemo; return }
         if (intent?.hasExtra("live_fallback_ms") == true) {   // 테스트: 정밀 모델 → 기본 모델 자동 전환 기준
             MeetingEngine.liveFallbackBacklogMs = intent.getLongExtra("live_fallback_ms", 40_000L); intent.removeExtra("live_fallback_ms")
         }
