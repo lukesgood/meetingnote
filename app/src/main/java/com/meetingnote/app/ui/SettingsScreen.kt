@@ -227,7 +227,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ModelCatalog.retired.filter { remember(tick) { MeetingEngine.models.file(it).exists() } }.forEach { spec ->
                     HorizontalDivider()
                     ModelOption(spec, selected = null, tick = tick, busy = engine.busy,
-                        onSelect = {}, onDelete = { confirmDelete = spec })
+                        onSelect = {}, onDelete = { confirmDelete = spec }, retired = true)
                 }
             }
         }
@@ -312,6 +312,8 @@ internal fun Hint(text: String) = Text(
 private fun ModelOption(
     spec: ModelSpec, selected: Boolean?, tick: Int, busy: Boolean,
     onSelect: () -> Unit, onDelete: () -> Unit,
+    /** 더 이상 쓰지 않는 모델: 받기 버튼 없이 남은 파일 크기와 삭제만 (받다 만 파일도 지울 수 있게) */
+    retired: Boolean = false,
 ) {
     val store = MeetingEngine.models
     val ready = remember(tick, spec) { store.isReady(spec) }
@@ -320,6 +322,13 @@ private fun ModelOption(
     // 오른쪽 상태(받음/진행률/받기). 휴대폰처럼 좁으면 이름 아래 줄로 내려 이름·설명 칸이 찌그러지지 않게
     val status: @Composable () -> Unit = {
         when {
+            retired -> {
+                val bytes = remember(tick, spec) { store.file(spec).length() }
+                Text(mb(bytes), style = MaterialTheme.typography.labelLarge)
+                IconButton(onClick = onDelete, enabled = !busy) {
+                    Icon(Icons.Default.DeleteOutline, if (!busy) "삭제" else "처리 중이라 삭제 불가")
+                }
+            }
             ready -> {
                 AssistChip(
                     onClick = {}, enabled = false,
