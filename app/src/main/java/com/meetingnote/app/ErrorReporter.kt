@@ -192,6 +192,10 @@ object ErrorReporter {
             appendLine("- 앱: ${pm.versionName} (${if (Build.VERSION.SDK_INT >= 28) pm.longVersionCode else 0})")
             appendLine("- 기기: ${Build.MANUFACTURER} ${Build.MODEL} · SoC ${soc} · CPU 코어 ${Runtime.getRuntime().availableProcessors()}개")
             appendLine("- RAM: %.1fGB (여유 %.1fGB) · 저장 공간 여유 %s".format(mem.totalMem / 1e9, mem.availMem / 1e9, free))
+            runCatching { "- 칩: ${DeviceInfo.chipName} · 고성능 코어 ${DeviceInfo.bigCores}개 · 그래픽 칩 '${GpuSupport.renderer}' · " +
+                "엔진 ${com.meetingnote.llama.LlamaNative.loaded ?: "아직 안 불러옴"} · 가속 ${GpuSupport.accelName(GpuSupport.accel)}" +
+                (com.meetingnote.llama.LlamaNative.gpuLoadError?.let { " · 가속 엔진 오류: ${it.take(200)}" } ?: "") +
+                (if (GpuSupport.failed) " · 그래픽 칩 사용 중 종료 기록" else "") }.getOrNull()?.let { appendLine(it) }
             appendLine("- Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) · ${Build.SUPPORTED_ABIS.firstOrNull()}")
             appendLine("- 설정: 요약 모델 ${s.llm.title}, 스레드 ${s.threads}, 용어 사전 ${if (s.vocabulary.isBlank()) "없음" else "사용(내용 제외)"}")
             appendLine("- 모델: $models")

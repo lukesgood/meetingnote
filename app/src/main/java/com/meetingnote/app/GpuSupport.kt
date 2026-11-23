@@ -101,7 +101,10 @@ object GpuSupport {
         return when {
             !supported && !npuSupported -> "$chip — 그래픽 칩·AI 칩 지원 대상이 아니어서 CPU만 씁니다 (스냅드래곤 8 2세대 이상 지원)."
             failed -> "$chip — 점검 중 오류가 있어 CPU만 씁니다."
-            !engineLoaded -> "$chip — 가속 엔진을 불러오지 못해 CPU만 씁니다."
+            // 엔진은 회의록·통역·점검에서 처음 쓸 때 불러온다 (그 전에는 아직 모름)
+            LlamaNative.loaded == null -> "$chip — 지원 기기입니다. 점검을 실행하면 CPU와 속도를 비교해 빠른 쪽을 씁니다."
+            !engineLoaded -> "$chip — 가속 엔진을 불러오지 못해 CPU만 씁니다." +
+                (LlamaNative.gpuLoadError?.let { " (${it.take(120)})" } ?: "")
             accel != CPU -> "$chip — 회의록·통역에 ${accelName(accel)}을 씁니다."
             else -> "$chip — 기기 점검에서 CPU가 가장 빨라 CPU를 씁니다."
         }

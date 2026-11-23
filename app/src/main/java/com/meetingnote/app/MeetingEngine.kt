@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +36,8 @@ data class EngineState(
     val liveNotice: String? = null,
     /** 녹음 중 실시간 인식을 하고 있는지 (설정에서 꺼져 있거나 밀려서 멈추면 false) */
     val liveText: Boolean = true,
+    /** 녹음 중 미리 인식: 녹음 앞에서부터 여기까지 녹취록을 만들어 둠 (null이면 미리 인식 안 함) */
+    val preRecognizedMs: Long? = null,
     val lastRtf: Double? = null,
     val summaryText: String = "",
     val summaryStage: String = "",
@@ -398,7 +401,15 @@ object MeetingEngine {
                 )
                 recorder = r
                 r.start()
+                recordingActive = true
                 _state.update { it.copy(phase = Phase.RECORDING, message = null) }
+                // 실시간 녹취록을 끈 녹음: 화면에 보이지 않게 녹음 파일을 앞에서부터 정밀 인식해 둔다.
+                // 회의가 끝나면 아직 인식 안 한 뒷부분만 남아 기다리는 시간이 크게 준다 (결과는 회의 후 정밀 인식과 같은 방식)
+                if (!live && settings.preRecognize) {
+                    refineShown = false
+                    _state.update { it.copy(preRecognizedMs = 0) }
+                    preRefine = scope.async { refineInternal(meeting.id, sttSpec, growing = { recordingActive }) }
+                }
             } catch (e: Throwable) {
                 fail(e)
             }
@@ -458,13 +469,15 @@ object MeetingEngine {
         _state.update { it.copy(phase = Phase.FINISHING_STT, message = "남은 음성 인식 중…") }
         scope.launch {
             r.stop(); recorder = null
+            recordingActive = false
+            val pre = preRefine; preRefine = null
             transcriber?.finish(); transcriber = null
             finishInterpreter()
             val lines = _state.value.lines
             repo.saveTranscript(id, lines)
             repo.get(id)?.let { repo.save(it.copy(durationMs = r.samplesWritten * 1000 / AudioRecorder.SAMPLE_RATE, recording = false)) }
             applyTermFixes(id)
-            releaseWhisper()
+            if (pre == null) releaseWhisper()     // 미리 인식 중이면 그쪽이 모델을 쓰고 있음 (끝나면 스스로 해제)
             // 실시간 인식을 안 했거나 도중에 멈췄으면 녹음 전체 인식은 필수 (정밀 모델 없으면 기본 모델)
             val liveFull = liveSpec != null && !liveStopped
             val refine = if (!liveFull && !settings.interpret) true
@@ -475,7 +488,20 @@ object MeetingEngine {
             val first = if (quick) summarizeInternal(id, finish = false) else SummaryResult.FAILED
             var refined = false
             try {
-                if (refine) refined = refineInternal(id, if (liveFull) ModelCatalog.REFINER else postSttSpec())
+                refined = when {
+                    pre != null -> {
+                        // 녹음 중 미리 인식한 작업에 남은 부분을 맡기고 진행을 화면에 표시
+                        refineShown = true
+                        _state.update { it.copy(phase = Phase.REFINING, message = "남은 부분 인식 중…", preRecognizedMs = null) }
+                        try { pre.await() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) {
+                            Log.e(TAG, "pre-recognition failed, refining from start", e); ErrorReporter.recordError(e)
+                            runCatching { withContext(inference) { releaseWhisper() } }
+                            refineInternal(id, postSttSpec())
+                        }
+                    }
+                    refine -> refineInternal(id, if (liveFull) ModelCatalog.REFINER else postSttSpec())
+                    else -> false
+                }
             } catch (e: Throwable) {
                 // 정밀 인식이 실패해도 실시간 녹취록으로 회의록은 만든다
                 Log.e(TAG, "refine failed", e); ErrorReporter.recordError(e)
@@ -621,14 +647,19 @@ object MeetingEngine {
      * 작은 목소리·숫자·직함 오인식과 환각 반복이 크게 줄었다 (2026-11-17 실제 회의 녹음 비교).
      * 원래 실시간 녹취록은 transcript_live.json으로 보관.
      */
-    /** @return 녹취록을 정밀 인식 결과로 바꿨는지 */
-    private suspend fun refineInternal(id: String, spec: ModelSpec = ModelCatalog.REFINER): Boolean = withContext(inference) {
+    /**
+     * @param growing 녹음 중 미리 인식: 녹음 파일이 아직 자라는 동안 true를 돌려주는 함수. 그동안은 화면에 진행을 표시하지 않고
+     *   5분 블록이 찰 때마다 인식하며, 파일 끝에 닿으면 기다린다. 녹음이 끝나면(false) 남은 부분을 처리하고 마친다.
+     *   진행 표시는 [refineShown]이 true가 된 뒤부터.
+     * @return 녹취록을 정밀 인식 결과로 바꿨는지
+     */
+    private suspend fun refineInternal(id: String, spec: ModelSpec = ModelCatalog.REFINER, growing: (() -> Boolean)? = null): Boolean = withContext(inference) {
         val audio = repo.audioFile(id)
-        val total = wavSampleCount(audio)
-        if (total < AudioRecorder.SAMPLE_RATE) return@withContext false
         val sr = AudioRecorder.SAMPLE_RATE
-        _state.update { it.copy(phase = Phase.REFINING, message = "정밀 인식 모델 불러오는 중…", refineFraction = 0f, refineEtaSec = null) }
-        ErrorReporter.trail("정밀 인식 시작: ${total / sr}초")
+        if (growing == null && wavSampleCount(audio) < sr) return@withContext false
+        if (growing == null) refineShown = true
+        if (refineShown) _state.update { it.copy(phase = Phase.REFINING, message = "정밀 인식 모델 불러오는 중…", refineFraction = 0f, refineEtaSec = null) }
+        ErrorReporter.trail(if (growing != null) "녹음 중 미리 인식 시작 (${spec.id})" else "정밀 인식 시작: ${wavSampleCount(audio) / sr}초")
         releaseSharedLlm()
         val w = loadWhisper(spec)
         val vocab = settings.vocabulary.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
@@ -640,12 +671,20 @@ object MeetingEngine {
         val out = ArrayList<TranscriptLine>()
         var lastKey = ""
         val t0 = System.currentTimeMillis()
+        var busyMs = 0L           // 실제 인식에 쓴 시간 (녹음 중 기다린 시간 제외) → 남은 시간 추정
+        var busySamples = 0L
 
         fun progress(done: Double) {
+            val total = wavSampleCount(audio).coerceAtLeast(1)
+            if (growing != null && growing()) {
+                _state.update { it.copy(preRecognizedMs = done.toLong() * 1000 / sr) }
+                return
+            }
+            if (!refineShown) return
             val f = (done / total).toFloat().coerceIn(0f, 1f)
-            val el = (System.currentTimeMillis() - t0) / 1000.0
-            val eta = if (f > 0.03) (el / f * (1 - f)).toInt() else null
-            _state.update { it.copy(refineFraction = f, refineEtaSec = eta,
+            val rate = if (busySamples > sr * 20) busyMs.toDouble() / busySamples else null   // ms per sample
+            val eta = rate?.let { ((total - done) * it / 1000).toInt() }
+            _state.update { it.copy(phase = Phase.REFINING, refineFraction = f, refineEtaSec = eta,
                 message = "정밀 인식 중 ${(f * 100).toInt()}% (녹음 ${formatTime(done.toLong() * 1000 / sr)} / ${formatTime(total * 1000 / sr)})") }
         }
 
@@ -655,11 +694,13 @@ object MeetingEngine {
             val gain = Loudness.blockGain(pcm, sr)
             if (gain > 1.05f) for (k in pcm.indices) pcm[k] = (pcm[k] * gain).coerceIn(-1f, 1f)
             val base = offset
+            val tStart = System.currentTimeMillis()
             val r = w.transcribe(pcm, threads = settings.threads, language = "ko", beamSize = 5,
                 initialPrompt = vocab, vadModelPath = models.file(ModelCatalog.VAD).path,
                 noContext = true, carryInitialPrompt = settings.refineVocabulary,
                 vadThreshold = REFINE_VAD_THRESHOLD, vadPadMs = REFINE_VAD_PAD_MS,
                 onProgress = { pct -> progress(base + n * pct / 100.0) })
+            busyMs += System.currentTimeMillis() - tStart; busySamples += n
             val offMs = base * 1000 / sr
             for (seg in r.segments) {
                 val text = Repetition.collapse(seg.text)
@@ -690,9 +731,30 @@ object MeetingEngine {
         }
 
         progress(0.0)
-        readWavBlocks(audio, sr / 10) { block ->
-            System.arraycopy(block, 0, buf, len, block.size); len += block.size
-            if (len >= maxBlock) process(quietCut())
+        // 파일을 앞에서부터 읽음. 녹음 중이면 끝에 닿았을 때 기다렸다 이어 읽음 (녹음기는 버퍼 없이 바로 씀)
+        java.io.RandomAccessFile(audio, "r").use { raf ->
+            var pos = 44L
+            val bytes = ByteArray(sr / 10 * 2)
+            while (true) {
+                val live = growing?.invoke() == true
+                val avail = raf.length() - pos
+                if (avail < bytes.size) {
+                    if (live) { kotlinx.coroutines.delay(500); continue }
+                    if (avail >= 2) {
+                        // 녹음 끝: 남은 조각
+                        val n = (avail / 2).toInt()
+                        raf.seek(pos); raf.readFully(bytes, 0, n * 2); pos += n * 2
+                        for (i in 0 until n) buf[len + i] = ((bytes[2 * i + 1].toInt() shl 8) or (bytes[2 * i].toInt() and 0xff)).toShort()
+                        len += n
+                    }
+                    break
+                }
+                raf.seek(pos); raf.readFully(bytes); pos += bytes.size
+                val n = bytes.size / 2
+                for (i in 0 until n) buf[len + i] = ((bytes[2 * i + 1].toInt() shl 8) or (bytes[2 * i].toInt() and 0xff)).toShort()
+                len += n
+                if (len >= maxBlock) process(quietCut())
+            }
         }
         if (len > sr / 2) process(len)
         releaseWhisper()
@@ -706,11 +768,17 @@ object MeetingEngine {
             applyTermFixes(id)
         }
         val sec = (System.currentTimeMillis() - t0) / 1000
-        Log.i(TAG, "refine done: ${total / sr}s audio in ${sec}s, ${out.size} lines")
+        Log.i(TAG, "refine done: ${wavSampleCount(audio) / sr}s audio in ${sec}s (busy ${busyMs / 1000}s), ${out.size} lines" +
+            if (growing != null) ", started during recording" else "")
         ErrorReporter.trail("정밀 인식 완료: ${sec}초, ${out.size}문장")
-        _state.update { it.copy(refineFraction = null, refineEtaSec = null, message = null) }
+        _state.update { it.copy(refineFraction = null, refineEtaSec = null, message = null, preRecognizedMs = null) }
         out.isNotEmpty()
     }
+    /** 정밀 인식 진행을 화면에 표시할지 (녹음 중 미리 인식하는 동안은 false) */
+    @Volatile private var refineShown = true
+    @Volatile private var recordingActive = false
+    /** 녹음 중 미리 인식 작업 (실시간 녹취록을 끈 녹음) */
+    private var preRefine: kotlinx.coroutines.Deferred<Boolean>? = null
 
     // ---------------------------------------------------------------- 요약
 
@@ -881,6 +949,10 @@ class Settings(context: Context) {
     var liveModel: String
         get() = prefs.getString("live_model", "auto") ?: "auto"
         set(v) = prefs.edit().putString("live_model", v).apply()
+    /** 실시간 녹취록을 끈 녹음에서 녹음하는 동안 미리 정밀 인식 (회의 후 기다리는 시간 단축. 끄면 회의 후 한 번에) */
+    var preRecognize: Boolean
+        get() = prefs.getBoolean("pre_recognize", true)
+        set(v) = prefs.edit().putBoolean("pre_recognize", v).apply()
     /** 녹음 중 실시간 녹취록 (기본 끔: 녹음만 하고 회의 후 녹음 전체를 정밀 인식. 통역 중에는 항상 켬) */
     var liveTranscript: Boolean
         get() = prefs.getBoolean("live_transcript", false)

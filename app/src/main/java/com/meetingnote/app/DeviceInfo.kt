@@ -12,8 +12,31 @@ object DeviceInfo {
         }
     }
 
-    /** 고성능 코어 수: 가장 낮은 클럭 그룹(효율 코어)을 제외한 코어. 정보를 못 읽으면 전체의 절반 */
+    /**
+     * 효율 코어 설계 (CPU part): ARM Cortex-A32/A35/A53/A55/A510/A520,
+     * Qualcomm Kryo Silver 0x801(A53)·0x803(A55)·0x805(A55, SD855~870 — 태블릿 실측)
+     */
+    private val LITTLE_PARTS = setOf(0xd01, 0xd04, 0xd03, 0xd05, 0xd46, 0xd80, 0x801, 0x803, 0x805)
+
+    /** 코어별 CPU part (/proc/cpuinfo). 읽지 못하면 빈 목록 */
+    private val cpuParts: List<Int> by lazy {
+        runCatching {
+            File("/proc/cpuinfo").readLines().filter { it.startsWith("CPU part") }
+                .map { Integer.decode(it.substringAfter(':').trim()) }
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * 고성능 코어 수: 효율 코어 설계(A55 등)를 뺀 코어.
+     * 클럭만으로 나누면 Snapdragon 8 Elite(4.3GHz 2개 + 3.5GHz 6개, 효율 코어 없음)를 2개로 잘못 셈 (2026-11-23 실제 기기).
+     * CPU part를 못 읽으면 가장 낮은 클럭 그룹을 효율 코어로 보고, 그것도 없으면 전체의 절반.
+     */
     val bigCores: Int by lazy {
+        val parts = cpuParts
+        if (parts.size == Runtime.getRuntime().availableProcessors()) {
+            val big = parts.count { it !in LITTLE_PARTS }
+            if (big > 0) return@lazy big
+        }
         val f = maxFreqs
         if (f.isEmpty()) return@lazy (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(2)
         val min = f.min()

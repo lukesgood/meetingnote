@@ -250,8 +250,13 @@ fun LiveScreen(onDone: (String?) -> Unit, onBack: () -> Unit) {
                                 textAlign = TextAlign.Center)
                         }
                         Text(
-                            if (paused) "일시정지 중에는 녹음하지 않습니다."
-                            else "녹음만 하고 있습니다. 회의가 끝나면 녹음 전체로 녹취록과 회의록을 만듭니다.",
+                            when {
+                                paused -> "일시정지 중에는 녹음하지 않습니다."
+                                s.preRecognizedMs != null -> "녹음하면서 녹취록을 미리 만들고 있습니다 (화면에는 표시하지 않음). " +
+                                    "회의가 끝나면 남은 부분만 인식한 뒤 회의록을 만듭니다." +
+                                    ((s.preRecognizedMs ?: 0L).let { d -> if (d > 0) "\n앞 ${formatTime(d)}까지 완료" else "" })
+                                else -> "녹음만 하고 있습니다. 회의가 끝나면 녹음 전체로 녹취록과 회의록을 만듭니다."
+                            },
                             style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

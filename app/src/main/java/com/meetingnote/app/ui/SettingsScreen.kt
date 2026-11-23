@@ -129,6 +129,18 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                     Switch(liveOn, { liveOn = it; settings.liveTranscript = it }, enabled = !engine.busy)
                 }
+                if (!liveOn) {
+                    var pre by remember { mutableStateOf(settings.preRecognize) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("녹음하면서 미리 인식", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            Text("녹음하는 동안 화면에 보이지 않게 녹취록을 미리 만들어, 회의 후 기다리는 시간을 줄입니다. " +
+                                "결과는 회의 후 한 번에 인식할 때와 같습니다. 녹음 중 배터리를 더 씁니다.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(pre, { pre = it; settings.preRecognize = it }, enabled = !engine.busy)
+                    }
+                }
                 if (liveOn || settings.interpret) {
                     var liveModel by remember { mutableStateOf(settings.liveModel) }
                     Text("실시간 인식 모델", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)

@@ -98,12 +98,19 @@ object LlamaNative {
      * llama.cpp가 공식 지원하는 Adreno 750/810/830/840에서만 켜야 한다 — 다른 Adreno는 OpenCL 초기화 중 드라이버가 앱을 죽인다.
      */
     @Volatile var useGpuEngine = false
+    /** 가속 판 엔진을 불러오지 못한 이유 (실패했을 때만) */
+    @Volatile var gpuLoadError: String? = null
+        private set
 
     @Synchronized internal fun load() {
         if (loaded != null) return
         if (useGpuEngine && supportsAccelerated) {
             try { System.loadLibrary("llama_jni_gpu"); loaded = "gpu"; return }
-            catch (e: UnsatisfiedLinkError) { /* libOpenCL.so 없음 등: CPU 판으로 */ }
+            catch (e: UnsatisfiedLinkError) {
+                // libOpenCL.so 없음 등: CPU 판으로. 이유는 기기 점검·오류 보고에 표시
+                gpuLoadError = e.message ?: e.toString()
+                android.util.Log.w("LlamaNative", "accelerated engine load failed", e)
+            }
         }
         val forced = System.getProperty("meetingnote.cpu")
         val want = when (forced) {
