@@ -518,7 +518,7 @@ private fun AboutCard(onReport: () -> Unit) {
     var showLicenses by remember { mutableStateOf(false) }
     fun open(url: String) = ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     SectionCard(Icons.Default.Info, "정보 및 지원", "회의노트 v$version") {
-        Hint("녹음·녹취록·회의록은 기기 밖으로 전송되지 않습니다. 인터넷은 모델을 받을 때와 오류 보고를 열 때만 씁니다.")
+        Hint("녹음·녹취록·회의록은 기기 밖으로 전송되지 않습니다. 인터넷은 모델을 받을 때, 오류 보고를 열 때, 기기 점검의 '결과 보내기'를 누를 때(기기 정보와 속도 숫자만, 익명)만 씁니다.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onReport) { Icon(Icons.Default.BugReport, null, Modifier.size(18.dp)); Text(" 오류 보고") }
             OutlinedButton(onClick = { open("https://github.com/${ErrorReporter.REPO}") }) {

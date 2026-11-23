@@ -242,6 +242,11 @@ object DeviceCheck {
     fun dismissSuggestion() = prefs.edit().putBoolean("suggest_dismissed", true).apply()
 
     /** 오류 보고용 한 줄 요약 */
+    /** 마지막 점검의 회의록 모델 장치별 측정 (CPU · 그래픽 칩 · AI 칩) — 결과 보내기용 */
+    var accelLog: String
+        get() = prefs.getString("accel_log", "") ?: ""
+        set(v) = prefs.edit().putString("accel_log", v).apply()
+
     fun summaryLine(): String {
         val b = bench
         val dot = (if (hasDotprod) "dotprod" else "no-dotprod") +

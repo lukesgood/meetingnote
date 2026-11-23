@@ -209,6 +209,9 @@ object MeetingEngine {
                     Log.i("DeviceCheck", "turbo rtf=%.3f".format(turboRtf))
                 }
                 val llm = mutableMapOf<String, DeviceCheck.LlmBench>()
+                val accelLog = ArrayList<String>()
+                fun fmt(name: String, g: GenerationStats?) = "$name " + (g?.let {
+                    "%d ms (읽기 %.0f / 쓰기 %.1f tok/s)".format(it.promptMs + it.genMs, it.promptTps, it.genTps) } ?: "실패")
                 for (spec in ModelCatalog.llms.filter { models.isReady(it) && DeviceCheck.ramOkFor(it) }) {
                     _checking.value = "${spec.title.substringBefore(" (")} 속도 측정 중…"
                     var st = benchLlm(spec, accel = GpuSupport.CPU)
@@ -216,6 +219,7 @@ object MeetingEngine {
                     Log.i("DeviceCheck", "${spec.id} prompt ${st.promptTokens}tok/${st.promptMs}ms gen ${st.genTokens}tok/${st.genMs}ms " +
                         "-> %.1f / %.2f tok/s".format(st.promptTps, st.genTps))
                     // 가속 판 엔진이면 지원하는 그래픽 칩·AI 칩으로도 재서, CPU보다 확실히(10% 이상) 빠른 것 중 가장 빠른 장치를 쓴다
+                    accelLog += fmt("CPU", st)
                     if (GpuSupport.engineLoaded) {
                         val cpuMs = st.promptMs + st.genMs
                         var best = GpuSupport.CPU; var bestMs = cpuMs * 0.9; var bestSt = st
@@ -227,6 +231,7 @@ object MeetingEngine {
                             val ms = g?.let { it.promptMs + it.genMs }
                             Log.i("DeviceCheck", "${GpuSupport.accelName(a)}: ${g?.let { "prompt %.1f / gen %.2f tok/s, %dms".format(it.promptTps, it.genTps, ms) } ?: "failed"} (cpu ${cpuMs}ms)")
                             ErrorReporter.trail("${GpuSupport.accelName(a)} 점검: ${ms ?: "실패"}ms (CPU ${cpuMs}ms)")
+                            accelLog += fmt(GpuSupport.accelName(a), g)
                             if (g != null && g.genTokens >= 8 && ms!! < bestMs) { best = a; bestMs = ms.toDouble(); bestSt = g }
                         }
                         GpuSupport.accel = best
@@ -237,6 +242,7 @@ object MeetingEngine {
                     }
                 }
                 DeviceCheck.bench = DeviceCheck.Bench(rtf, llm, System.currentTimeMillis(), settings.threads, turboRtf)
+                DeviceCheck.accelLog = accelLog.joinToString(" · ")
                 ErrorReporter.trail("기기 점검 완료")
             } catch (e: Throwable) {
                 Log.e("DeviceCheck", "check failed", e)

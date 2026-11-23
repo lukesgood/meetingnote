@@ -38,6 +38,13 @@ import androidx.compose.ui.unit.dp
 import com.meetingnote.app.DeviceCheck
 import com.meetingnote.app.DeviceCheck.Level
 import com.meetingnote.app.MeetingEngine
+import com.meetingnote.app.ResultReporter
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,7 +105,54 @@ fun DeviceCheckCard(tick: Int, busy: Boolean) {
             }
         }
         Hint("예상 시간은 기준 기기(Snapdragon 870) 실측과 비교한 추정치입니다.")
+        if (ResultReporter.enabled && bench != null && c == null) {
+            var open by remember { mutableStateOf(false) }
+            TextButton(onClick = { open = true }) { Text("결과 보내기") }
+            if (open) SendResultDialog(onDismiss = { open = false })
+        }
     }
+}
+
+/** 점검 결과 보내기: 보낼 내용을 그대로 보여 주고, 동의하면 익명으로 제출 */
+@Composable
+private fun SendResultDialog(onDismiss: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val report = remember { ResultReporter.build(ctx) }
+    var sending by remember { mutableStateOf(false) }
+    var done by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!sending) onDismiss() },
+        title = { Text(if (done == null) "점검 결과 보내기" else "결과 보내기") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                if (done != null) Text(done!!)
+                else {
+                    Text("앱 개선을 위해 아래 기기 정보와 속도 측정값을 익명으로 보냅니다. " +
+                        "이름·계정·녹음·녹취록·회의록 등 회의 내용은 보내지 않습니다.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(12.dp))
+                    Text("기기: ${report.device}\n칩: ${report.chip}\n앱 버전: ${report.version}\n\n${report.result}",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
+            }
+        },
+        confirmButton = {
+            if (done == null) Button(enabled = !sending, onClick = {
+                sending = true
+                scope.launch {
+                    done = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        runCatching { ResultReporter.send(report) }
+                            .fold({ "보냈습니다. 고맙습니다!" }, { "보내지 못했습니다: ${it.message ?: it}\n인터넷 연결을 확인한 뒤 다시 시도해 주세요." })
+                    }
+                    sending = false
+                }
+            }) { Text(if (sending) "보내는 중…" else "보내기") }
+            else TextButton(onClick = onDismiss) { Text("닫기") }
+        },
+        dismissButton = { if (done == null) TextButton(enabled = !sending, onClick = onDismiss) { Text("취소") } },
+    )
 }
 
 /** 홈 화면: 문제가 있거나 아직 점검하지 않았을 때만 표시 */
