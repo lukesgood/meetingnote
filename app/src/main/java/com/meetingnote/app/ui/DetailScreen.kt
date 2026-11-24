@@ -82,7 +82,9 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
     val transcript = remember(id, engine.phase, version) { repo.loadTranscript(id) }
     // 번역이 실제로 붙은 회의만 (lang은 통역이 아닌 회의에도 붙는다: 실시간 인식의 감지 언어, 정밀 인식은 항상 "ko")
     val hasTranslation = transcript.any { it.translation != null }
-    val translatingNow = engine.meetingId == id && engine.interpreting
+    // 대기 중인 번역이 있을 때만 '번역 중…' (interpreting은 회의가 끝나도 꺼지지 않으므로 쓰지 않는다.
+    // 대기 0이면 번역 없는 문장은 실패·빈 결과)
+    val translatingNow = engine.meetingId == id && engine.translatePending > 0
     var tab by remember { mutableIntStateOf(if (minutes != null) 0 else 1) }
     var confirmDelete by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
