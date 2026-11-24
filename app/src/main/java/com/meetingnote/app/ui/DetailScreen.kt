@@ -80,7 +80,9 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
     val meeting = remember(id, engine.phase, version) { repo.get(id) }
     val minutes = remember(id, engine.phase, version) { repo.loadMinutes(id) }
     val transcript = remember(id, engine.phase, version) { repo.loadTranscript(id) }
-    val hasTranslation = transcript.any { it.translation != null || it.lang != null }
+    // 번역이 실제로 붙은 회의만 (lang은 통역이 아닌 회의에도 붙는다: 실시간 인식의 감지 언어, 정밀 인식은 항상 "ko")
+    val hasTranslation = transcript.any { it.translation != null }
+    val translatingNow = engine.meetingId == id && engine.interpreting
     var tab by remember { mutableIntStateOf(if (minutes != null) 0 else 1) }
     var confirmDelete by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -179,7 +181,7 @@ fun DetailScreen(id: String, onBack: () -> Unit, onOpenLive: () -> Unit) {
                     SelectionContainer {
                         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                             items(transcript) { l ->
-                                TranscriptRow(l, showTranslation = hasTranslation)
+                                TranscriptRow(l, showTranslation = hasTranslation, translating = translatingNow)
                                 HorizontalDivider()
                             }
                         }

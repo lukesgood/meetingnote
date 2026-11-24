@@ -19,9 +19,10 @@ import com.meetingnote.app.formatTime
 /**
  * 녹취록 한 줄: 시각 · (통역 시) 언어 배지 · 원문 · 번역.
  * @param showTranslation 통역 회의이면 번역 줄(또는 '번역 중…')을 표시
+ * @param translating 지금 번역이 진행 중인지. false면 번역이 없는 문장(번역 실패·빈 결과)에 '번역 중…'을 띄우지 않는다
  */
 @Composable
-fun TranscriptRow(l: TranscriptLine, showTranslation: Boolean, scale: Float = 1f) {
+fun TranscriptRow(l: TranscriptLine, showTranslation: Boolean, scale: Float = 1f, translating: Boolean = true) {
     // 통역 모드에서는 번역을 원문보다 크게 (회의 참석자가 읽는 쪽이 번역)
     val origSize = (if (showTranslation) 15f else 16f) * scale
     val trSize = 19f * scale
@@ -41,7 +42,7 @@ fun TranscriptRow(l: TranscriptLine, showTranslation: Boolean, scale: Float = 1f
                 if (l.translation != null) Text(
                     l.translation, style = MaterialTheme.typography.bodyLarge, fontSize = trSize.sp, lineHeight = (trSize * 1.35f).sp,
                     color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
-                ) else Text(
+                ) else if (translating) Text(
                     "번역 중…", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic,
                 )
