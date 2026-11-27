@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -17,12 +19,33 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    // Play 업로드 키: 저장소 밖(~/.meetingnote-signing/keystore.properties)에 둔다. 없으면 play 빌드는 서명되지 않음
+    val uploadProps = Properties().apply {
+        val f = file(System.getProperty("user.home") + "/.meetingnote-signing/keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    signingConfigs {
+        if (uploadProps.containsKey("storeFile")) create("upload") {
+            storeFile = file(uploadProps.getProperty("storeFile"))
+            storePassword = uploadProps.getProperty("storePassword")
+            keyAlias = uploadProps.getProperty("keyAlias")
+            keyPassword = uploadProps.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // GitHub 배포·태블릿 설치용은 계속 debug 키 (키를 바꾸면 기존 설치본을 지워야 해 회의가 사라짐)
             signingConfig = signingConfigs.getByName("debug")
+        }
+        // Google Play 업로드용: ./gradlew :app:bundlePlay → app/build/outputs/bundle/play/app-play.aab
+        create("play") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.findByName("upload")
+            matchingFallbacks += listOf("release")
         }
     }
     compileOptions {

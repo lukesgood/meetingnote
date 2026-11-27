@@ -1,0 +1,28 @@
+MeetingNote records your meetings, transcribes what was said and writes the minutes for you.
+Everything runs on your phone or tablet. Recordings, transcripts and minutes are never sent to any server.
+
+■ Features
+• Record → automatic minutes: when recording stops, the whole recording is transcribed again with a more accurate model, then minutes with a summary, decisions and action items are written.
+• Minutes in Korean or English.
+• Live interpretation (Korean ↔ English): detects the spoken language and shows the translation as large captions.
+• Import audio: m4a, mp3, aac, ogg, wav and the audio track of videos.
+• Custom vocabulary for company names, people and technical terms.
+• Automatic titles, grouping by date, search, editing, copy and share.
+• Keeps recording and writing minutes with the screen off; stop from the notification.
+• Device check: tells you whether live transcription and interpretation will keep up on your device and how long minutes will take.
+
+■ Privacy
+• Recordings and meeting content stay on your device.
+• No ads, no analytics, no sign-in.
+• The internet is only used to download the AI models the first time. After that the app works offline.
+
+■ Before you start
+• The first launch downloads about 4 GB of AI model files. Wi-Fi and enough free storage are recommended.
+• 64-bit ARM devices only. 6 GB of RAM or more is recommended; on 4–6 GB devices writing minutes may be slow or the app may be closed by the system.
+• Processing time depends on your device. Check Settings > Device check for an estimate.
+• AI transcripts and minutes can contain mistakes. Please check anything important.
+• Please get participants' consent before recording.
+• The interface is currently in Korean.
+
+■ Built with
+whisper.cpp, llama.cpp, OpenAI Whisper, Silero VAD and Google Gemma 4. The app's source code is available on GitHub under the MIT license.

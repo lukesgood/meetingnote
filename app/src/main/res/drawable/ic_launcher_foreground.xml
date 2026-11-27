@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 회의노트 아이콘 전경: 문서(회의록) + 마이크 배지. 108dp 캔버스, 안전 영역(지름 66dp) 안에 배치 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 문서 (줄은 구멍으로 뚫음) -->
+    <path android:fillColor="#FFFFFF" android:fillType="evenOdd"
+        android:pathData="M37,30h26a4,4 0,0 1,4 4v38a4,4 0,0 1,-4 4h-26a4,4 0,0 1,-4 -4v-38a4,4 0,0 1,4 -4z
+            M40,39h20v3h-20z M40,46h20v3h-20z M40,53h14v3h-14z M40,60h9v3h-9z" />
+    <!-- 배지 테두리 (배경색) + 배지 -->
+    <path android:fillColor="@color/ic_launcher_background"
+        android:pathData="M66,68m-13,0a13,13 0,1 0,26 0a13,13 0,1 0,-26 0" />
+    <path android:fillColor="#FFC233"
+        android:pathData="M66,68m-11,0a11,11 0,1 0,22 0a11,11 0,1 0,-22 0" />
+    <!-- 마이크 -->
+    <path android:fillColor="#1A3D8F"
+        android:pathData="M66,61a2.5,2.5 0,0 1,2.5 2.5v5a2.5,2.5 0,0 1,-5 0v-5a2.5,2.5 0,0 1,2.5 -2.5z" />
+    <path android:strokeColor="#1A3D8F" android:strokeWidth="1.6" android:strokeLineCap="round"
+        android:pathData="M61.5,67.5a4.5,4.5 0,0 0,9 0 M66,72v3 M63.5,75h5" />
+</vector>

@@ -524,6 +524,7 @@ private fun AboutCard(onReport: () -> Unit) {
             OutlinedButton(onClick = { open("https://github.com/${ErrorReporter.REPO}") }) {
                 Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(18.dp)); Text(" GitHub")
             }
+            TextButton(onClick = { open(PRIVACY_POLICY_URL) }) { Text("개인정보처리방침") }
             TextButton(onClick = { showLicenses = !showLicenses }) { Text(if (showLicenses) "라이선스 닫기" else "라이선스") }
         }
         if (showLicenses) {
@@ -541,3 +542,6 @@ private fun AboutCard(onReport: () -> Unit) {
 }
 
 private fun mb(bytes: Long) = "%.0fMB".format(bytes / 1e6)
+
+/** Play 스토어 등록 정보와 같은 주소 (저장소 docs/privacy.html을 GitHub Pages로 게시) */
+const val PRIVACY_POLICY_URL = "https://lukesgood.github.io/meetingnote/privacy.html"

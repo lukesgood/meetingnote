@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>회의노트 개인정보처리방침</title>
+<style>
+  :root { --fg:#1b1b1f; --bg:#fff; --muted:#5b5f6a; --line:#e3e5ea; --accent:#2457D6; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e6e6ea; --bg:#121316; --muted:#a0a4ae; --line:#2a2c31; --accent:#8fb0ff; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.7 system-ui, -apple-system, "Noto Sans KR", sans-serif; }
+  main { max-width:760px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; } h2 { font-size:1.15rem; margin:32px 0 8px; }
+  .meta { color:var(--muted); font-size:.9rem; } hr { border:0; border-top:1px solid var(--line); margin:48px 0; }
+  a { color:var(--accent); } table { border-collapse:collapse; width:100%; font-size:.95rem; }
+  td, th { border:1px solid var(--line); padding:6px 10px; text-align:left; vertical-align:top; }
+</style>
+</head>
+<body><main>
+
+<h1>회의노트 개인정보처리방침</h1>
+<p class="meta">시행일: 2026년 11월 27일 · 적용 앱: 회의노트 (com.meetingnote.app)</p>
+
+<p>회의노트는 녹음, 음성 인식, 번역, 회의록 작성을 <b>모두 사용자의 기기 안에서</b> 처리합니다.
+개발자는 사용자의 녹음, 녹취록, 회의록이나 그 밖의 개인정보를 수집하거나 저장하거나 제3자에게 제공하지 않습니다.</p>
+
+<h2>1. 처리하는 정보와 저장 위치</h2>
+<table>
+<tr><th>정보</th><th>용도</th><th>저장 위치</th></tr>
+<tr><td>마이크 음성(녹음 파일)</td><td>음성 인식, 통역, 회의록 작성</td><td>기기 안 앱 전용 저장 공간</td></tr>
+<tr><td>사용자가 가져온 음성·동영상 파일</td><td>음성 인식</td><td>기기 안 (변환한 오디오만 앱 저장 공간에 보관)</td></tr>
+<tr><td>녹취록, 회의록, 회의 제목, 용어 사전, 설정</td><td>앱 기능 제공</td><td>기기 안 앱 전용 저장 공간</td></tr>
+</table>
+<p>이 정보는 외부 서버로 전송되지 않습니다. 앱을 삭제하면 함께 삭제되며, 각 회의는 앱에서 언제든 삭제할 수 있습니다.
+사용자가 '공유' 기능으로 회의록을 다른 앱에 보내는 경우에만 사용자가 고른 앱으로 전달됩니다.</p>
+
+<h2>2. 인터넷 사용</h2>
+<ul>
+  <li><b>AI 모델 다운로드</b>: 음성 인식·회의록 모델 파일을 Hugging Face(huggingface.co)에서 받습니다. 이때 일반적인 웹 요청처럼 IP 주소 등 접속 정보가 Hugging Face에 전달될 수 있으며, 이는 <a href="https://huggingface.co/privacy">Hugging Face 개인정보처리방침</a>을 따릅니다. 녹음이나 회의 내용은 전송되지 않습니다.</li>
+  <li><b>오류 보고(선택)</b>: 사용자가 '오류 보고'를 누르면 기기 모델, Android 버전, 앱 버전, 오류 내용이 미리 채워진 GitHub 이슈 작성 화면이 브라우저에서 열립니다. 사용자가 내용을 확인하고 직접 제출할 때만 GitHub에 공개 게시되며, 녹음·녹취록·회의록·회의 제목·용어 사전은 포함되지 않습니다.</li>
+</ul>
+<p>앱에는 광고, 분석 도구, 추적 기능이 없습니다.</p>
+
+<h2>3. 권한</h2>
+<ul>
+  <li><b>마이크</b>: 회의 녹음과 실시간 통역</li>
+  <li><b>알림</b>: 녹음·처리 진행 상황 표시와 알림창에서 종료</li>
+  <li><b>포그라운드 서비스</b>: 화면이 꺼져도 녹음과 회의록 작성을 이어 가기 위함</li>
+  <li><b>인터넷</b>: 위 2항의 모델 다운로드와 오류 보고</li>
+</ul>
+
+<h2>4. 아동</h2>
+<p>회의노트는 아동을 대상으로 하지 않으며 아동의 개인정보를 수집하지 않습니다.</p>
+
+<h2>5. 변경</h2>
+<p>이 방침이 바뀌면 이 페이지에 게시하고 시행일을 갱신합니다.</p>
+
+<h2>6. 문의</h2>
+<p><a href="https://github.com/lukesgood/meetingnote/issues">GitHub 이슈</a>로 문의해 주세요.</p>
+
+<hr>
+
+<h1 lang="en">MeetingNote Privacy Policy</h1>
+<div lang="en">
+<p class="meta">Effective: November 27, 2026 · App: MeetingNote (com.meetingnote.app)</p>
+<p>MeetingNote records, transcribes, translates and writes meeting minutes <b>entirely on your device</b>.
+The developer does not collect, store or share your recordings, transcripts, minutes or any other personal data.</p>
+<h2>1. Data processed and where it stays</h2>
+<p>Microphone audio, imported audio/video files, transcripts, minutes, meeting titles, the custom vocabulary and settings are kept only in the app's private storage on your device. None of it is sent to any server. Uninstalling the app deletes it, and you can delete any meeting in the app. Minutes leave the device only when you use Share and pick a destination app.</p>
+<h2>2. Internet use</h2>
+<ul>
+  <li><b>Model downloads</b>: speech and language model files are downloaded from Hugging Face (huggingface.co). As with any web request, connection data such as your IP address may reach Hugging Face, subject to the <a href="https://huggingface.co/privacy">Hugging Face privacy policy</a>. No audio or meeting content is sent.</li>
+  <li><b>Error reports (optional)</b>: tapping “Report an error” opens a pre-filled GitHub issue form in your browser with the device model, Android version, app version and error details. It is posted publicly on GitHub only if you review and submit it yourself. Recordings, transcripts, minutes, meeting titles and vocabulary are never included.</li>
+</ul>
+<p>The app contains no ads, analytics or tracking.</p>
+<h2>3. Permissions</h2>
+<p>Microphone (recording and live interpretation), notifications (progress and stop control), foreground service (keep recording and writing minutes with the screen off), internet (model downloads and error reports).</p>
+<h2>4. Children</h2>
+<p>MeetingNote is not directed at children and does not collect children's data.</p>
+<h2>5. Changes</h2>
+<p>Changes will be posted on this page with a new effective date.</p>
+<h2>6. Contact</h2>
+<p>Please open a <a href="https://github.com/lukesgood/meetingnote/issues">GitHub issue</a>.</p>
+</div>
+
+</main></body>
+</html>

@@ -131,7 +131,7 @@ class MeetingService : Service() {
         )
         val phase = MeetingEngine.state.value.phase
         val b = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.drawable.ic_stat_mic)
             .setContentTitle("회의노트")
             .setContentText(text)
             .setOngoing(true)
